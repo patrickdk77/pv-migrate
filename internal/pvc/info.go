@@ -429,16 +429,24 @@ func RequireNodes(nodes []string) map[string]any {
 		return nil
 	}
 
+	// A node field selector takes exactly one value for In, which the API
+	// server rejects otherwise. Terms are OR'd, so one term per node says
+	// "any of these".
+	terms := make([]map[string]any, 0, len(nodes))
+	for _, node := range nodes {
+		terms = append(terms, map[string]any{
+			"matchFields": []map[string]any{{
+				"key":      "metadata.name",
+				"operator": "In",
+				"values":   []string{node},
+			}},
+		})
+	}
+
 	return map[string]any{
 		"nodeAffinity": map[string]any{
 			"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
-				"nodeSelectorTerms": []map[string]any{{
-					"matchFields": []map[string]any{{
-						"key":      "metadata.name",
-						"operator": "In",
-						"values":   nodes,
-					}},
-				}},
+				"nodeSelectorTerms": terms,
 			},
 		},
 	}
