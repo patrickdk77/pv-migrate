@@ -29,7 +29,7 @@ The helm chart of pv-migrate
 | rclone.enabled | bool | `false` | Enable creation of Rclone job |
 | rclone.extraArgs | string | `""` | Extra args to be appended to the rclone command. Setting this might cause the tool to not function properly. |
 | rclone.image.pullPolicy | string | `"IfNotPresent"` | Rclone image pull policy |
-| rclone.image.repository | string | `"docker.io/utkuozdemir/pv-migrate-rclone"` | Rclone image repository |
+| rclone.image.repository | string | `"docker.patrickdk.com/dswett/pv-migrate-rclone"` | Rclone image repository |
 | rclone.image.tag | string | `"latest"` | Rclone image tag (overridden at runtime by pv-migrate to match the CLI version) |
 | rclone.imagePullSecrets | list | `[]` | Rclone image pull secrets |
 | rclone.jobAnnotations | object | `{}` | Rclone job annotations |
@@ -62,7 +62,7 @@ The helm chart of pv-migrate
 | rsync.enabled | bool | `false` | Enable creation of Rsync job |
 | rsync.extraArgs | string | `""` | Extra args to be appended to the rsync command. Setting this might cause the tool to not function properly. |
 | rsync.image.pullPolicy | string | `"IfNotPresent"` | Rsync image pull policy |
-| rsync.image.repository | string | `"docker.io/utkuozdemir/pv-migrate-rsync"` | Rsync image repository |
+| rsync.image.repository | string | `"docker.patrickdk.com/dswett/pv-migrate-rsync"` | Rsync image repository |
 | rsync.image.tag | string | `"latest"` | Rsync image tag (overridden at runtime by pv-migrate to match the CLI version) |
 | rsync.imagePullSecrets | list | `[]` | Rsync image pull secrets |
 | rsync.jobAnnotations | object | `{}` | Rsync job annotations |
@@ -94,7 +94,7 @@ The helm chart of pv-migrate
 | sshd.deploymentLabels | object | `{}` | SSHD deployment labels |
 | sshd.enabled | bool | `false` | Enable SSHD server deployment |
 | sshd.image.pullPolicy | string | `"IfNotPresent"` | SSHD image pull policy |
-| sshd.image.repository | string | `"docker.io/utkuozdemir/pv-migrate-sshd"` | SSHD image repository |
+| sshd.image.repository | string | `"docker.patrickdk.com/dswett/pv-migrate-sshd"` | SSHD image repository |
 | sshd.image.tag | string | `"latest"` | SSHD image tag (overridden at runtime by pv-migrate to match the CLI version) |
 | sshd.imagePullSecrets | list | `[]` | SSHD image pull secrets |
 | sshd.namespace | string | `""` | Namespace to run SSHD pod in |

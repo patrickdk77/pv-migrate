@@ -462,7 +462,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: pv-migrate
-              image: docker.io/utkuozdemir/pv-migrate:<version>
+              image: docker.patrickdk.com/dswett/pv-migrate:<version>
               env:
                 - name: PV_MIGRATE_S3_ACCESS_KEY
                   valueFrom:

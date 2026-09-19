@@ -238,6 +238,13 @@ Doing that on a change to how the recordings are made is deliberate rather than 
 
 `Taskfile.yml` is the entry point and mirrors what CI runs; `task lint` covers Go, chart, shell and the release config.
 
+This fork publishes its images from `Makefile` rather than from the release workflow, to the registry the chart now defaults to.
+`make movers` builds and pushes the three data mover images, `make cli` the CLI image, and `make` does both.
+Each one is tagged with the current version, its major and major.minor prefixes, and `latest`, and `skopeo copy --all` moves the whole index rather than one platform.
+The mover tag has to be the tag the CLI asks for, so the Makefile stamps the same version string into the binary that the CLI turns back into an image tag; see the note on that below.
+`make local` builds the movers for the host architecture only and loads them into the local daemon, which is what the integration suites want.
+The release workflow and the `dockers_v2` block in `.goreleaser.yml` still name the upstream registry and are not what publishes this fork.
+
 Releases are cut by pushing a version tag, which `task release` derives, signs and pushes.
 The tag is signed, and the release workflow's first job checks it before anything is built or published.
 It refuses a tag that GitHub does not report as verified, a tag that does not name the release or does not point at the commit being built, and a commit that is not on the main branch.

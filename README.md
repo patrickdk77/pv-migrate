@@ -10,10 +10,6 @@
 [![license](https://img.shields.io/github/license/utkuozdemir/pv-migrate?style=flat-square)](https://github.com/utkuozdemir/pv-migrate/blob/main/LICENSE)
 
 [![release downloads](https://img.shields.io/github/downloads/utkuozdemir/pv-migrate/total?label=release%20downloads&style=flat-square)](https://github.com/utkuozdemir/pv-migrate/releases)
-[![CLI image pulls](https://img.shields.io/docker/pulls/utkuozdemir/pv-migrate?label=cli%20image%20pulls&style=flat-square)](https://hub.docker.com/r/utkuozdemir/pv-migrate)
-[![rsync image pulls](https://img.shields.io/docker/pulls/utkuozdemir/pv-migrate-rsync?label=rsync%20image%20pulls&style=flat-square)](https://hub.docker.com/r/utkuozdemir/pv-migrate-rsync)
-[![sshd image pulls](https://img.shields.io/docker/pulls/utkuozdemir/pv-migrate-sshd?label=sshd%20image%20pulls&style=flat-square)](https://hub.docker.com/r/utkuozdemir/pv-migrate-sshd)
-[![rclone image pulls](https://img.shields.io/docker/pulls/utkuozdemir/pv-migrate-rclone?label=rclone%20image%20pulls&style=flat-square)](https://hub.docker.com/r/utkuozdemir/pv-migrate-rclone)
 [![krew](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkubernetes-sigs%2Fkrew-index%2Fmaster%2Fplugins%2Fpv-migrate.yaml&query=%24.spec.version&label=krew&style=flat-square)](https://krew.sigs.k8s.io/plugins/#pv-migrate)
 
 `pv-migrate` is a CLI tool and kubectl plugin that moves the data of Kubernetes `PersistentVolumeClaim`s.
@@ -143,7 +139,7 @@ brew install utkuozdemir/pv-migrate/pv-migrate
 The artifacts live here:
 
 - [GitHub releases](https://github.com/utkuozdemir/pv-migrate/releases): archives and checksums for Linux, macOS and Windows
-- [Docker Hub](https://hub.docker.com/r/utkuozdemir/pv-migrate) and [GHCR](https://github.com/utkuozdemir?tab=packages&repo_name=pv-migrate): the CLI image, next to the three data mover images (`pv-migrate-rsync`, `pv-migrate-sshd`, `pv-migrate-rclone`)
+- `docker.patrickdk.com/dswett`: the CLI image `pv-migrate`, next to the three data mover images (`pv-migrate-rsync`, `pv-migrate-sshd`, `pv-migrate-rclone`)
 - [krew index](https://krew.sigs.k8s.io/plugins/#pv-migrate), the [Homebrew tap](https://github.com/utkuozdemir/homebrew-pv-migrate) and the [Scoop bucket](https://github.com/utkuozdemir/scoop-pv-migrate)
 
 Releases are signed, and the install guide has the [verification commands](docs/install.md#verifying-what-you-downloaded).

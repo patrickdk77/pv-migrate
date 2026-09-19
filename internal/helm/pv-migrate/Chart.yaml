@@ -19,9 +19,9 @@ maintainers:
 annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/images: |
-    - name: utkuozdemir/pv-migrate-sshd
-      image: docker.io/utkuozdemir/pv-migrate-sshd:latest
-    - name: utkuozdemir/pv-migrate-rsync
-      image: docker.io/utkuozdemir/pv-migrate-rsync:latest
-    - name: utkuozdemir/pv-migrate-rclone
-      image: docker.io/utkuozdemir/pv-migrate-rclone:latest
+    - name: dswett/pv-migrate-sshd
+      image: docker.patrickdk.com/dswett/pv-migrate-sshd:latest
+    - name: dswett/pv-migrate-rsync
+      image: docker.patrickdk.com/dswett/pv-migrate-rsync:latest
+    - name: dswett/pv-migrate-rclone
+      image: docker.patrickdk.com/dswett/pv-migrate-rclone:latest

@@ -144,7 +144,7 @@ func TestMergeHelmValues_ImageTagInjected(t *testing.T) {
 	baseValues := map[string]any{
 		"rclone": map[string]any{
 			"image": map[string]any{
-				"repository": "docker.io/utkuozdemir/pv-migrate-rclone",
+				"repository": "docker.patrickdk.com/dswett/pv-migrate-rclone",
 				"tag":        "latest",
 			},
 		},
@@ -161,7 +161,7 @@ func TestMergeHelmValues_HelmSetOverridesImageTag(t *testing.T) {
 	baseValues := map[string]any{
 		"rclone": map[string]any{
 			"image": map[string]any{
-				"repository": "docker.io/utkuozdemir/pv-migrate-rclone",
+				"repository": "docker.patrickdk.com/dswett/pv-migrate-rclone",
 				"tag":        "latest",
 			},
 		},
