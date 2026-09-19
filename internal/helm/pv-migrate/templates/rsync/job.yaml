@@ -68,17 +68,27 @@ spec:
                 {{ required ".Values.rsync.command is required!" .Values.rsync.command }} {{ .Values.rsync.extraArgs }}
                 { rc=$?; set +x; } 2>/dev/null
                 [ "$rc" -eq 0 ] && break
-                # Vanished source files are expected on a volume that is still being
-                # written to, and retrying cannot bring them back. The echoed line is
-                # what the client looks for to report the skipped files, since on a
-                # successful job it never sees the raw log.
-                if [ "$rc" -eq 24 ]; then
-                  echo "pv-migrate: some source files vanished during the transfer; treated as success"
-                  rc=0
-                  break
-                fi
-                # A usage error is deterministic, so retrying only burns the budget.
-                [ "$rc" -eq 1 ] && break
+                {{- with .Values.rsync.toleratedExitCodes }}
+                # Codes this data mover documents as a success with caveats, such
+                # as source files that vanished while it read them. The echoed
+                # line is what the client looks for to report them, since on a
+                # successful job it never sees the raw log. Which codes those are
+                # belongs to the mover: read with another's table, the same number
+                # means something else entirely.
+                case "$rc" in
+                  {{ . }})
+                    echo {{ $.Values.rsync.toleratedMarker | quote }}
+                    rc=0
+                    break
+                    ;;
+                esac
+                {{- end }}
+                {{- with .Values.rsync.noRetryExitCodes }}
+                # Deterministic failures, so retrying only burns the budget.
+                case "$rc" in
+                  {{ . }}) break ;;
+                esac
+                {{- end }}
                 n=$((n+1))
                 [ "$n" -gt "$retries" ] && break
                 echo "rsync attempt $n/$attempts failed, waiting $period seconds before trying again"

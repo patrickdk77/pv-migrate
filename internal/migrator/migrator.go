@@ -38,15 +38,9 @@ func New() *Migrator {
 
 //nolint:funlen
 func (m *Migrator) Run(ctx context.Context, request *migration.Request, logger *slog.Logger) error {
-	nameToStrategyMap, err := m.getStrategyMap(request.Strategies)
+	nameToStrategyMap, err := m.preflight(request)
 	if err != nil {
 		return err
-	}
-
-	// Only the public API defaults the writer, so a direct caller can leave it
-	// unset. Everything below writes to it without checking.
-	if request.Writer == nil {
-		request.Writer = io.Discard
 	}
 
 	migrationID := request.ID
@@ -116,6 +110,33 @@ func (m *Migrator) Run(ctx context.Context, request *migration.Request, logger *
 	reportOutcomes(request, outcomes, logger)
 
 	return newLadderExhaustedError(outcomes)
+}
+
+// preflight settles what can be decided before anything touches a cluster: the
+// checks that hold for every strategy, and the defaults a direct caller of the
+// internal API may have left unset.
+//
+// A conflict between the mover and the flags belongs here rather than in a
+// strategy. A strategy that declines is ordinary and the ladder moves on, so a
+// refusal down there reaches the caller as "no strategy could complete the
+// migration", with the one sentence that says what to change thrown away.
+func (m *Migrator) preflight(request *migration.Request) (map[string]strategy.Strategy, error) {
+	if err := strategy.CheckMoverFlags(request); err != nil {
+		return nil, err
+	}
+
+	nameToStrategyMap, err := m.getStrategyMap(request.Strategies)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only the public API defaults the writer, so a direct caller can leave it
+	// unset. Everything below writes to it without checking.
+	if request.Writer == nil {
+		request.Writer = io.Discard
+	}
+
+	return nameToStrategyMap, nil
 }
 
 // describeAttempt announces a strategy with what it does, when it has a

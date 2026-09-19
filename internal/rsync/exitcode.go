@@ -37,6 +37,15 @@ const VanishedFilesExitCode = 24
 // prints it, which is what keeps the two spellings from drifting apart.
 const VanishedFilesMarker = "pv-migrate: some source files vanished during the transfer"
 
+// ToleratedExitCodes are the codes that count as a success with caveats. Only
+// vanished source files: everything rsync did transfer is intact, and retrying
+// cannot bring back a file that is already gone.
+func ToleratedExitCodes() []int { return []int{VanishedFilesExitCode} }
+
+// NoRetryExitCodes are the codes to stop on rather than retry. A usage error
+// is deterministic, so a retry only burns the budget.
+func NoRetryExitCodes() []int { return []int{1} }
+
 // remoteShellExitCode is not an rsync exit value. rsync passes the remote
 // shell's status through, and ssh uses this one for its own failures.
 const remoteShellExitCode = 255

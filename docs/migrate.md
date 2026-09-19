@@ -138,6 +138,25 @@ pv-migrate \
 
 `--rsync-push` has no effect on the `mount` and `local` strategies.
 
+## Data movers
+
+`--mover rsync` is the default. It compares the two volumes and sends only what differs, so a second run over a mostly unchanged volume is cheap.
+
+`--mover tar` sends the whole tree every time and carries what rsync's archive mode leaves behind.
+A hard link arrives as a link rather than as a second copy of the file, a sparse region stays sparse instead of arriving as its full length of zeroes, and extended attributes survive.
+Choose it when the volume holds any of those and the copy has to be faithful, and rsync when the volume is large and mostly unchanged.
+
+The choice is independent of the strategies.
+tar runs over the same ssh transport rsync does, so every strategy works with either, and the `mount` strategy pipes tar into tar inside one pod with no network between them.
+
+`--rsync-extra-args` describes rsync alone and is refused with `--mover tar`.
+
+The tar mover compresses the stream with zstd at level 1 unless `--no-compress` is given, since the stream is discarded on arrival and at that level compressing costs less than sending the bytes.
+The `mount` strategy compresses with neither mover, because nothing crosses a network there.
+
+Progress comes from the compressor rather than from tar, which prints nothing a reader can use.
+With `--no-compress` there is no progress to report.
+
 Migration skips the `lost+found` directory at the root of the source volume.
 Every ext4 or xfs filesystem has one, `fsck` writes recovered fragments into it, and only root can read it, so copying it would fail a `--non-root` run over a directory holding nothing of yours.
 A directory further down that happens to be called `lost+found` is yours and is copied.

@@ -71,13 +71,13 @@ func buildClusterIPHelmVals(
 		sshTargetHost = formatSSHTargetHost(mig.Request.DestHostOverride)
 	}
 
-	rsyncCmdStr, err := buildRsyncCmdString(mig.Request, topo.push, sshTargetHost, 0)
+	mover, err := buildMoverCmdSSH(mig.Request, topo.push, sshTargetHost, 0)
 	if err != nil {
 		return nil, "", err
 	}
 
 	return map[string]any{
-		rsyncComponent: buildRsyncHelmValues(topo.rsync, rsyncCmdStr, privateKey, privateKeyMountPath),
+		rsyncComponent: buildRsyncHelmValues(topo.rsync, mover, privateKey, privateKeyMountPath),
 		sshdComponent:  buildSshdHelmValues(topo.sshd, publicKey),
 	}, sshTargetHost, nil
 }

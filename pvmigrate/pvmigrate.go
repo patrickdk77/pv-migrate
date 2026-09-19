@@ -27,6 +27,21 @@ const (
 	Local        Strategy = "local"
 )
 
+// The programs that can move the data, for Migration.Mover.
+const (
+	// MoverRsync copies only what differs between the two volumes, so a
+	// repeat run is cheap.
+	MoverRsync = migration.MoverRsync
+	// MoverTar sends the whole tree every time and carries hard links,
+	// sparse regions and extended attributes, which rsync's archive mode
+	// does not.
+	MoverTar = migration.MoverTar
+)
+
+// Movers returns the accepted values for Migration.Mover, in the order they
+// are offered.
+func Movers() []string { return migration.Movers() }
+
 // KeyAlgorithm identifies an SSH key algorithm.
 type KeyAlgorithm string
 
@@ -102,8 +117,14 @@ type Migration struct {
 	ShowProgressBar       bool
 	SourceMountReadWrite  bool
 	NoCompress            bool
-	NonRoot               bool
-	RsyncExtraArgs        string
+
+	// Mover selects the program that moves the data, one of Movers(). Empty
+	// means rsync, which copies only what differs. Tar sends the whole tree
+	// every time and carries hard links, sparse regions and extended
+	// attributes, which rsync's archive mode does not.
+	Mover          string
+	NonRoot        bool
+	RsyncExtraArgs string
 
 	KeyAlgorithm         KeyAlgorithm
 	SSHReverseTunnelPort int
@@ -179,6 +200,17 @@ func (m *Migration) ApplyDefaults() {
 		m.KeyAlgorithm = Ed25519
 	}
 
+	if m.Mover == "" {
+		m.Mover = MoverRsync
+	}
+
+	m.applyTransportDefaults()
+	m.applyOutputDefaults()
+}
+
+// applyTransportDefaults fills in how the two sides reach each other and how
+// long they are given.
+func (m *Migration) applyTransportDefaults() {
 	if m.SSHReverseTunnelPort == 0 {
 		m.SSHReverseTunnelPort = DefaultSSHReverseTunnelPort
 	}
@@ -190,7 +222,12 @@ func (m *Migration) ApplyDefaults() {
 	if m.LoadBalancerTimeout == 0 {
 		m.LoadBalancerTimeout = defaultLoadBalancerTimeout
 	}
+}
 
+// applyOutputDefaults fills in where the run reports itself. A caller that set
+// neither gets the same stream the CLI uses and a logger that discards, so a
+// library user is not written to without asking.
+func (m *Migration) applyOutputDefaults() {
 	if m.Writer == nil {
 		m.Writer = os.Stderr
 	}
@@ -230,6 +267,7 @@ func toInternalRequest(mig *Migration) *migration.Request {
 		ShowProgressBar:       mig.ShowProgressBar,
 		SourceMountReadWrite:  mig.SourceMountReadWrite,
 		NoCompress:            mig.NoCompress,
+		Mover:                 mig.Mover,
 		NonRoot:               mig.NonRoot,
 		RsyncExtraArgs:        mig.RsyncExtraArgs,
 		KeyAlgorithm:          string(mig.KeyAlgorithm),

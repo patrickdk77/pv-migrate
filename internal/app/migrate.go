@@ -83,6 +83,7 @@ const (
 	FlagSSHKeyAlgorithm           = "ssh-key-algorithm"
 	FlagSSHReverseTunnelPort      = "ssh-reverse-tunnel-port"
 	FlagNoCompress                = "no-compress"
+	FlagMover                     = "mover"
 	FlagNonRoot                   = "non-root"
 	FlagRsyncExtraArgs            = "rsync-extra-args"
 	FlagRsyncPush                 = "rsync-push"
@@ -225,6 +226,7 @@ func setMigrateCmdCompletion(
 		{FlagDestPath, completionFuncNoFileComplete},
 		{FlagStrategies, buildSliceCompletionFunc(util.ConvertStrings[string](pvmigrate.AllStrategies))},
 		{FlagSSHKeyAlgorithm, buildStaticSliceCompletionFunc(util.ConvertStrings[string](pvmigrate.KeyAlgorithms))},
+		{FlagMover, buildStaticSliceCompletionFunc(pvmigrate.Movers())},
 		{FlagID, completionFuncNoFileComplete},
 		{FlagHelmSet, completionFuncNoFileComplete},
 		{FlagHelmSetString, completionFuncNoFileComplete},
@@ -343,7 +345,11 @@ func setMigrateCmdFlags(cmd *cobra.Command, options *Options, logLevels, logForm
 		),
 	)
 	flags.BoolVar(&migration.NoCompress, FlagNoCompress, migration.NoCompress,
-		"Do not compress data during migration (disables rsync -z)")
+		"Do not compress data during migration")
+	flags.StringVar(&migration.Mover, FlagMover, migration.Mover,
+		"Program that moves the data: rsync copies only what differs, so a repeat run is cheap; "+
+			"tar sends the whole tree every time and carries hard links, sparse regions and "+
+			"extended attributes, which rsync does not")
 	flags.BoolVar(&migration.NonRoot, FlagNonRoot, migration.NonRoot,
 		"Run containers as non-root (removes SYS_CHROOT; required for restricted PodSecurity clusters). "+
 			"Skips ownership and directory timestamp preservation (--no-o --no-g --omit-dir-times). "+

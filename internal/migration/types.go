@@ -46,7 +46,13 @@ type Request struct {
 	NoCompress            bool
 	NonRoot               bool
 	RsyncExtraArgs        string
-	Writer                io.Writer
+
+	// Mover selects which program moves the bytes. rsync copies only what
+	// differs, which makes a repeat run cheap; tar sends the whole tree every
+	// time but carries hard links, sparse regions and extended attributes,
+	// which rsync's archive mode does not.
+	Mover  string
+	Writer io.Writer
 
 	// StructuredLogs reports that the logger writes machine-readable records to
 	// the same stream as Writer. Plain-text blocks are suppressed then, and the
@@ -88,4 +94,17 @@ type Attempt struct {
 type DiagnosticTarget struct {
 	Release string
 	Info    *pvc.Info
+}
+
+// The movers Request.Mover accepts.
+const (
+	// MoverRsync copies only what differs between the two volumes.
+	MoverRsync = "rsync"
+	// MoverTar sends the whole tree, carrying what rsync leaves behind.
+	MoverTar = "tar"
+)
+
+// Movers returns the accepted mover names, in the order they are offered.
+func Movers() []string {
+	return []string{MoverRsync, MoverTar}
 }

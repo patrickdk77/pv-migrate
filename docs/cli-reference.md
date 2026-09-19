@@ -41,10 +41,11 @@ Flags:
       --loadbalancer-timeout duration   Time to wait for the load balancer to receive an address before the loadbalancer strategy falls back to the Service's node port (default 2m0s)
       --log-format string               Log format, one of text, json (default "text")
       --log-level string                Log level, one of DEBUG, INFO, WARN, ERROR or an slog-parseable level: https://pkg.go.dev/log/slog#Level.UnmarshalText (default "INFO")
+      --mover string                    Program that moves the data: rsync copies only what differs, so a repeat run is cheap; tar sends the whole tree every time and carries hard links, sparse regions and extended attributes, which rsync does not (default "rsync")
   -o, --no-chown                        Omit chown during rsync
   -x, --no-cleanup                      Do not clean up after migration
       --no-cleanup-on-failure           Skip cleanup if the migration fails, leaving pods and resources on the cluster for inspection
-      --no-compress                     Do not compress data during migration (disables rsync -z)
+      --no-compress                     Do not compress data during migration
       --non-root                        Run containers as non-root (removes SYS_CHROOT; required for restricted PodSecurity clusters). Skips ownership and directory timestamp preservation (--no-o --no-g --omit-dir-times). Migration will fail if the source PVC contains files not readable by the non-root user
       --rsync-extra-args string         Extra rsync flags appended to the rsync command (use at your own risk)
       --rsync-push                      Push mode: run rsync on the source side and sshd on the destination side. Use when the source side cannot expose a service, e.g., behind a firewall or NAT. Has no effect on the mount and local strategies

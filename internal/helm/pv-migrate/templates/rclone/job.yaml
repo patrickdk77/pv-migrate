@@ -66,15 +66,20 @@ spec:
               {{- if .Values.rclone.metadataBase64 }}
 
               if [ $rc -eq 0 ]; then
-                echo '{{ .Values.rclone.metadataBase64 }}' | base64 -d > /tmp/metadata.yaml
+                # A name of its own rather than a fixed one under /tmp. A job has
+                # its container to itself, but the render tests run several of
+                # these scripts side by side on one filesystem, where a shared
+                # name lets one truncate the file another is still copying.
+                metadata_file=$(mktemp)
+                echo '{{ .Values.rclone.metadataBase64 }}' | base64 -d > "$metadata_file"
                 {{- if .Values.rclone.metadataLocalPath }}
-                cp /tmp/metadata.yaml "$PV_MIGRATE_METADATA_LOCAL_PATH"
+                cp "$metadata_file" "$PV_MIGRATE_METADATA_LOCAL_PATH"
                 metadata_rc=$?
                 {{- else }}
                 n=0
                 while [ "$n" -le "$retries" ]
                 do
-                  rclone --config "$PV_MIGRATE_CONFIG_PATH" copyto /tmp/metadata.yaml "$PV_MIGRATE_METADATA_REMOTE_PATH"
+                  rclone --config "$PV_MIGRATE_CONFIG_PATH" copyto "$metadata_file" "$PV_MIGRATE_METADATA_REMOTE_PATH"
                   metadata_rc=$?
                   [ "$metadata_rc" -eq 0 ] && break
                   n=$((n+1))

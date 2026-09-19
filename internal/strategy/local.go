@@ -119,7 +119,7 @@ func runLocalMigration(
 	eg.Go(func() error {
 		defer fwdCancel()
 
-		return waitAndRunRsync(ctx, attempt, privateKey, srcPortCh, destPortCh, logger)
+		return waitAndRunMover(ctx, attempt, privateKey, srcPortCh, destPortCh, logger)
 	})
 
 	return eg.Wait() //nolint:wrapcheck
@@ -130,7 +130,7 @@ func hasHelmOverrides(req *migration.Request) bool {
 		len(req.HelmFileValues) > 0 || len(req.HelmStringValues) > 0
 }
 
-func waitAndRunRsync(
+func waitAndRunMover(
 	ctx context.Context,
 	attempt *migration.Attempt,
 	privateKey string,
@@ -164,10 +164,10 @@ func waitAndRunRsync(
 		"🔗 rsync runs in the source pod and reaches the destination through a tunnel on its port %d, via this machine",
 		attempt.Migration.Request.SSHReverseTunnelPort))
 
-	return runRsyncOverSSH(ctx, attempt, privateKey, srcFwdPort, destFwdPort, logger)
+	return runMoverOverSSH(ctx, attempt, privateKey, srcFwdPort, destFwdPort, logger)
 }
 
-func runRsyncOverSSH(
+func runMoverOverSSH(
 	ctx context.Context,
 	attempt *migration.Attempt,
 	privateKey string,
@@ -202,11 +202,11 @@ func runRsyncOverSSH(
 		return fmt.Errorf("failed to open reverse tunnel on port %d: %w", tunnelPort, err)
 	}
 
-	rsyncCmd, err := buildRsyncCmdLocal(attempt.Migration)
+	mover, err := buildMoverCmdSSHSession(attempt.Migration)
 	if err != nil {
 		logClose(tunnelListener, logger, "🔶 Failed to close tunnel listener")
 
-		return fmt.Errorf("failed to build rsync command: %w", err)
+		return fmt.Errorf("failed to build the data mover command: %w", err)
 	}
 
 	session, err := sshClient.NewSession()
@@ -218,13 +218,13 @@ func runRsyncOverSSH(
 
 	defer func() { logClose(session, logger, "🔶 Failed to close SSH session") }()
 
-	return runRsyncSession(ctx, session, rsyncCmd, tunnelListener, destFwdPort, attempt.Migration.Request, logger)
+	return runMoverSession(ctx, session, mover, tunnelListener, destFwdPort, attempt.Migration.Request, logger)
 }
 
-func runRsyncSession(
+func runMoverSession(
 	ctx context.Context,
 	session *gossh.Session,
-	rsyncCmd string,
+	mover moverCommand,
 	tunnelListener net.Listener,
 	destFwdPort int,
 	req *migration.Request,
@@ -243,9 +243,9 @@ func runRsyncSession(
 
 	progressLogger := sessionProgressLogger(req, reader)
 
-	// rsyncDone is closed by the rsync goroutine after it finishes (and after its deferred
+	// moverDone is closed by the rsync goroutine after it finishes (and after its deferred
 	// cleanups run), so the context-watcher goroutine knows when to exit.
-	rsyncDone := make(chan struct{})
+	moverDone := make(chan struct{})
 
 	eg, ctx := errgroup.WithContext(ctx)
 
@@ -255,7 +255,7 @@ func runRsyncSession(
 		select {
 		case <-ctx.Done():
 			logClose(session, logger, "🔶 Failed to close SSH session on cancellation")
-		case <-rsyncDone:
+		case <-moverDone:
 		}
 
 		return nil
@@ -272,18 +272,18 @@ func runRsyncSession(
 		return progressLogger.Start(ctx, logger)
 	})
 
-	// Rsync runner: executes rsync on the source pod via SSH, then tears down shared
+	// Mover runner: executes the data mover on the source pod via SSH, then tears down shared
 	// resources so the other goroutines can exit cleanly.
 	var vanished bool
 
 	eg.Go(func() error {
-		defer close(rsyncDone)
+		defer close(moverDone)
 		defer func() { logClose(writer, logger, "🔶 Failed to close pipe writer") }()
 		defer func() { logClose(tunnelListener, logger, "🔶 Failed to close tunnel listener") }()
 
 		var sessionVanished bool
 
-		err := completeRsyncSession(ctx, session.Run(rsyncCmd), progressLogger, &sessionVanished)
+		err := completeMoverSession(ctx, session.Run(mover.command), mover.policy, progressLogger, &sessionVanished)
 		vanished = sessionVanished
 
 		return err
@@ -291,18 +291,19 @@ func runRsyncSession(
 
 	// The group is joined before anything is reported: the progress bar owns the
 	// output until every goroutine has stopped, and the tail is complete by now.
-	return finishRsyncSession(eg.Wait(), vanished, tail, progressLogger, logger)
+	return finishMoverSession(eg.Wait(), mover.policy, vanished, tail, progressLogger, logger)
 }
 
-// finishRsyncSession reports the joined group's outcome. Only the session's own
+// finishMoverSession reports the joined group's outcome. Only the session's own
 // failure gets the exit-status interpretation and the output tail; any other
 // error passes through untouched.
-func finishRsyncSession(
-	waitErr error, vanished bool, tail *lineTail, progressLogger *progresslog.Logger, logger *slog.Logger,
+func finishMoverSession(
+	waitErr error, policy moverPolicy, vanished bool, tail *lineTail,
+	progressLogger *progresslog.Logger, logger *slog.Logger,
 ) error {
 	if waitErr != nil {
-		if sessionErr, ok := errors.AsType[*rsyncRunError](waitErr); ok {
-			return rsyncSessionError(sessionErr.err, tail.Lines())
+		if sessionErr, ok := errors.AsType[*moverRunError](waitErr); ok {
+			return moverSessionError(policy, sessionErr.err, tail.Lines())
 		}
 
 		return waitErr //nolint:wrapcheck
@@ -341,32 +342,33 @@ type exitStatusError interface {
 
 var _ exitStatusError = (*gossh.ExitError)(nil)
 
-// rsyncRunError marks a failure of the rsync session itself, as opposed to the
+// moverRunError marks a failure of the mover session itself, as opposed to the
 // tunnel or the progress logger, so the caller knows which error to explain
 // with the session's exit status and output tail.
-type rsyncRunError struct {
+type moverRunError struct {
 	err error
 }
 
-func (e *rsyncRunError) Error() string { return e.err.Error() }
+func (e *moverRunError) Error() string { return e.err.Error() }
 
-func (e *rsyncRunError) Unwrap() error { return e.err }
+func (e *moverRunError) Unwrap() error { return e.err }
 
-// completeRsyncSession turns the session's result into the attempt's result.
+// completeMoverSession turns the session's result into the attempt's result.
 // A vanished-files exit falls through to the completion signal rather than
 // returning early: the progress logger keeps retrying the closed pipe until it
 // is told the transfer is done, so an early return would never let the group
 // finish. The vanished flag is reported back rather than logged here, because
 // the progress bar still owns the output at this point.
-func completeRsyncSession(
+func completeMoverSession(
 	ctx context.Context,
 	runErr error,
+	policy moverPolicy,
 	progressLogger *progresslog.Logger,
 	vanished *bool,
 ) error {
 	if runErr != nil {
-		if !isVanishedSourceFiles(runErr) {
-			return &rsyncRunError{err: runErr}
+		if !isToleratedExit(policy, runErr) {
+			return &moverRunError{err: runErr}
 		}
 
 		*vanished = true
@@ -375,23 +377,26 @@ func completeRsyncSession(
 	return progressLogger.MarkAsComplete(ctx)
 }
 
-// isVanishedSourceFiles reports whether rsync stopped only because files
-// disappeared from the source while it was reading them. There is no retry
-// script on this path, so the in-cluster script's rule lands here instead.
-func isVanishedSourceFiles(runErr error) bool {
+// isToleratedExit reports whether the mover stopped on a status it documents
+// as a success with caveats, such as source files that vanished while rsync
+// read them or files that changed while tar did. There is no retry script on
+// this path, so the in-cluster script's rule lands here instead, and it asks
+// the mover that actually ran rather than assuming rsync.
+func isToleratedExit(policy moverPolicy, runErr error) bool {
 	var exitErr exitStatusError
 
-	return errors.As(runErr, &exitErr) && exitErr.ExitStatus() == rsync.VanishedFilesExitCode
+	return errors.As(runErr, &exitErr) && policy.tolerates(exitErr.ExitStatus())
 }
 
-// rsyncSessionError explains a failed local rsync session with what was observed:
-// the status the session reported, rsync's documented meaning for it, and the
-// last raw output lines, which unlike an in-cluster job have no log to fetch back.
-func rsyncSessionError(runErr error, recentLines []string) error {
-	err := fmt.Errorf("rsync session failed: %w", runErr)
+// moverSessionError explains a failed local session with what was observed:
+// the status the session reported, the mover's own documented meaning for it,
+// and the last raw output lines, which unlike an in-cluster job have no log to
+// fetch back.
+func moverSessionError(policy moverPolicy, runErr error, recentLines []string) error {
+	err := fmt.Errorf("data mover session failed: %w", runErr)
 
 	if exitErr, ok := errors.AsType[exitStatusError](runErr); ok {
-		if meaning := rsync.Interpret(exitErr.ExitStatus()); meaning != "" {
+		if meaning := policy.interpret(exitErr.ExitStatus()); meaning != "" {
 			err = fmt.Errorf("%w (%s)", err, meaning)
 		}
 	}

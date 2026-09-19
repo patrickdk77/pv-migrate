@@ -70,6 +70,7 @@ The helm chart of pv-migrate
 | rsync.maxRetries | int | `10` | Number of retries to run rsync command |
 | rsync.namespace | string | `""` | Namespace to run Rsync pod in |
 | rsync.networkPolicy.enabled | bool | `true` | Create an allow-all network policy for the Rsync pod, so that it works in a default-deny namespace. pv-migrate turns this off on its own when it is not allowed to create network policies |
+| rsync.noRetryExitCodes | string | `"1"` | Exit codes the job stops on instead of retrying, as a shell case pattern |
 | rsync.nodeName | string | `""` | The node name to schedule Rsync pod on |
 | rsync.nodeSelector | object | `{}` | Rsync node selector |
 | rsync.podAnnotations | object | `{}` | Rsync pod annotations |
@@ -86,6 +87,8 @@ The helm chart of pv-migrate
 | rsync.serviceAccount.annotations | object | `{}` | Rsync service account annotations |
 | rsync.serviceAccount.create | bool | `true` | Create a service account for Rsync |
 | rsync.serviceAccount.name | string | `""` | Rsync service account name to use |
+| rsync.toleratedExitCodes | string | `"24"` | Exit codes the job treats as a success, as a shell case pattern (set by pv-migrate from the data mover in use) |
+| rsync.toleratedMarker | string | `"pv-migrate: some source files vanished during the transfer; treated as success"` | Line the job prints when it treats one of those as a success, which the client scans the log for |
 | rsync.tolerations | list | see [values.yaml](values.yaml) | Rsync pod tolerations |
 | rsync.ttlSecondsAfterFinished | string | `nil` | Seconds to keep the Job and its pod after completion/failure. Unset by default (Kubernetes decides). |
 | sshd.affinity | object | `{}` | SSHD pod affinity |

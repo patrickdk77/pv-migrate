@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 
 	"github.com/utkuozdemir/pv-migrate/internal/console"
 	"github.com/utkuozdemir/pv-migrate/internal/k8s"
@@ -177,8 +178,10 @@ func buildSshdHelmValues(side componentSide, publicKey string) map[string]any {
 	}
 }
 
-func buildRsyncHelmValues(side componentSide, rsyncCmd, privateKey, privateKeyMountPath string) map[string]any {
-	return map[string]any{
+func buildRsyncHelmValues(
+	side componentSide, mover moverCommand, privateKey, privateKeyMountPath string,
+) map[string]any {
+	vals := map[string]any{
 		keyEnabled:            true,
 		keyNamespace:          side.info.Claim.Namespace,
 		"privateKeyMount":     true,
@@ -191,9 +194,14 @@ func buildRsyncHelmValues(side componentSide, rsyncCmd, privateKey, privateKeyMo
 				keyReadOnly:  side.readOnly,
 			},
 		},
-		"command":   rsyncCmd,
 		keyAffinity: side.info.AffinityHelmValues,
 	}
+
+	// The command and the exit-code policy that reads its result belong
+	// together, so both are merged in from one place rather than set apart.
+	maps.Copy(vals, mover.values())
+
+	return vals
 }
 
 func installSshd(
@@ -227,12 +235,12 @@ func installRsyncJob(
 ) error {
 	mig := attempt.Migration
 
-	rsyncCmdStr, err := buildRsyncCmdString(mig.Request, topo.push, sshHost, sshPort)
+	mover, err := buildMoverCmdSSH(mig.Request, topo.push, sshHost, sshPort)
 	if err != nil {
 		return err
 	}
 
-	rsyncVals := buildRsyncHelmValues(topo.rsync, rsyncCmdStr, privateKey, privateKeyMountPath)
+	rsyncVals := buildRsyncHelmValues(topo.rsync, mover, privateKey, privateKeyMountPath)
 	rsyncVals["sshRemoteHost"] = sshHost
 
 	if sshPort != 0 {

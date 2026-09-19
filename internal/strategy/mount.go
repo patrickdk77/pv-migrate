@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 
 	"github.com/utkuozdemir/pv-migrate/internal/migration"
 	"github.com/utkuozdemir/pv-migrate/internal/rsync"
@@ -17,13 +18,13 @@ func (r *Mount) Run(ctx context.Context, attempt *migration.Attempt, logger *slo
 		return Declined(reason)
 	}
 
-	rsyncCmd, err := buildRsyncCmdMount(mig)
+	mover, err := buildMoverCmdLocal(mig)
 	if err != nil {
 		return fmt.Errorf("failed to build rsync command: %w", err)
 	}
 
 	sourceInfo := mig.SourceInfo
-	vals := buildMountHelmValues(mig, rsyncCmd)
+	vals := buildMountHelmValues(mig, mover)
 
 	releaseName := attempt.HelmReleaseNamePrefix
 	attempt.ReleaseNames = []string{releaseName}
@@ -38,31 +39,32 @@ func (r *Mount) Run(ctx context.Context, attempt *migration.Attempt, logger *slo
 // buildMountHelmValues builds the values for the one rsync pod that mounts both
 // volumes. It copies between two filesystems and opens no connection, so it gets
 // no network policy: one object less, and no permission to check for it.
-func buildMountHelmValues(mig *migration.Migration, rsyncCmd string) map[string]any {
+func buildMountHelmValues(mig *migration.Migration, mover moverCommand) map[string]any {
 	sourceInfo := mig.SourceInfo
 	destInfo := mig.DestInfo
 
-	return map[string]any{
-		rsyncComponent: map[string]any{
-			keyEnabled:   true,
-			keyNamespace: sourceInfo.Claim.Namespace,
-			"nodeName":   determineTargetNode(mig),
-			keyPVCMounts: []map[string]any{
-				{
-					keyName:      sourceInfo.Claim.Name,
-					keyMountPath: srcMountPath,
-					keyReadOnly:  !mig.Request.SourceMountReadWrite,
-				},
-				{
-					keyName:      destInfo.Claim.Name,
-					keyMountPath: destMountPath,
-				},
+	component := map[string]any{
+		keyEnabled:   true,
+		keyNamespace: sourceInfo.Claim.Namespace,
+		"nodeName":   determineTargetNode(mig),
+		keyPVCMounts: []map[string]any{
+			{
+				keyName:      sourceInfo.Claim.Name,
+				keyMountPath: srcMountPath,
+				keyReadOnly:  !mig.Request.SourceMountReadWrite,
 			},
-			"command":        rsyncCmd,
-			keyAffinity:      sourceInfo.AffinityHelmValues,
-			keyNetworkPolicy: map[string]any{keyEnabled: false},
+			{
+				keyName:      destInfo.Claim.Name,
+				keyMountPath: destMountPath,
+			},
 		},
+		keyAffinity:      sourceInfo.AffinityHelmValues,
+		keyNetworkPolicy: map[string]any{keyEnabled: false},
 	}
+
+	maps.Copy(component, mover.values())
+
+	return map[string]any{rsyncComponent: component}
 }
 
 func (r *Mount) cannotDoReason(t *migration.Migration) string {

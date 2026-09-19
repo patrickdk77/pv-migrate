@@ -115,6 +115,16 @@ func TestMigrate(t *testing.T) {
 		te := setupSameNS(t, si)
 		testSameNS(t, te)
 	})
+	t.Run("TarMoverKeepsWhatRsyncDrops", func(t *testing.T) {
+		t.Parallel()
+		te := setupSameNS(t, si)
+		testTarMover(t, te)
+	})
+	t.Run("TarMoverRefusesRsyncFlags", func(t *testing.T) {
+		t.Parallel()
+		te := setupSameNS(t, si)
+		testTarMoverRefusesRsyncFlags(t, te)
+	})
 	t.Run("RsyncExtraArgs", func(t *testing.T) {
 		t.Parallel()
 		testRsyncExtraArgs(t, si)
@@ -229,6 +239,65 @@ func TestMigrate(t *testing.T) {
 }
 
 // --- Test functions ---
+
+// testTarMover is the case the tar mover exists for. rsync's archive mode does
+// not carry hard links or sparse regions, so a volume holding either arrives
+// changed: two linked files become two copies, and a preallocated database
+// file arrives as its full length of zeroes. tar carries both.
+//
+//nolint:thelper // subtest implementation, not a helper
+func testTarMover(t *testing.T, te *testEnv) {
+	ctx := t.Context()
+
+	seed := "echo -n LINKED > /volume/original.txt && " +
+		"ln /volume/original.txt /volume/hardlink.txt && " +
+		// dd writes its summary to stderr, which execInPod reads as a failure.
+		"dd if=/dev/zero of=/volume/sparse.img bs=1 count=0 seek=8M 2>/dev/null"
+
+	_, err := execInPod(ctx, te.sourceCli, te.sourceNS, "source", seed)
+	require.NoError(t, err)
+
+	// clusterip rather than the ladder's own choice, so this runs the shape
+	// that goes through the sshd pod, where the quoting of the remote command
+	// and the ssh options have to hold. The local shape, which pipes tar into
+	// tar in one pod, is covered by the unit test that runs the built command
+	// through a real shell.
+	//
+	// Not mount: pinning it assumes one pod can mount both claims, which
+	// depends on where the two volumes were provisioned, so the strategy
+	// declines on a cluster that put them apart and a pinned run then has
+	// nowhere to fall back to.
+	cmd := fmt.Sprintf("%s --mover tar -s clusterip -i -n %s -N %s --source source --dest dest",
+		defaultHelmArgs(t), te.sourceNS, te.destNS)
+	require.NoError(t, runCliApp(ctx, t, cmd))
+
+	links, err := execInPod(ctx, te.destCli, te.destNS, "dest", "stat -c %h /volume/original.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "2", strings.TrimSpace(links),
+		"a hard link must arrive as one, not as a second copy of the file")
+
+	blocks, err := execInPod(ctx, te.destCli, te.destNS, "dest", "stat -c %b /volume/sparse.img")
+	require.NoError(t, err)
+	assert.Less(t, atoiOrZero(strings.TrimSpace(blocks)), 64,
+		"a sparse file must arrive sparse rather than as its full length of zeroes")
+
+	content, err := execInPod(ctx, te.destCli, te.destNS, "dest", "cat /volume/original.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "LINKED", strings.TrimSpace(content))
+}
+
+// The flags that describe rsync are refused rather than ignored, since the
+// chart would otherwise append them to the wrong end of a pipe.
+//
+//nolint:thelper // subtest implementation, not a helper
+func testTarMoverRefusesRsyncFlags(t *testing.T, te *testEnv) {
+	cmd := fmt.Sprintf("%s --mover tar --rsync-extra-args=--checksum -i -n %s -N %s --source source --dest dest",
+		defaultHelmArgs(t), te.sourceNS, te.destNS)
+
+	err := runCliApp(t.Context(), t, cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--rsync-extra-args")
+}
 
 //nolint:dupl,thelper
 func testSameNS(t *testing.T, te *testEnv) {

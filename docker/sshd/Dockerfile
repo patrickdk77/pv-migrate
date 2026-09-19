@@ -3,7 +3,11 @@ FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4c
 # we unlock the root user for sshd
 # https://github.com/alpinelinux/docker-alpine/issues/28#issuecomment-510510532
 # https://github.com/alpinelinux/docker-alpine/issues/28#issuecomment-659551571
-RUN apk add --no-cache rsync openssh openssh-server-pam tini && \
+# tar, zstd and pigz carry the tar data mover: this side runs the other half
+# of the pipe, reading or writing the volume that the ssh session reaches.
+# See docker/rclone/Dockerfile for why gzip is pointed at pigz.
+RUN apk add --no-cache rsync openssh openssh-server-pam tini tar zstd pigz && \
+    ln -sf "$(command -v pigz)" /bin/gzip && \
     sed -i -e 's/^root:!:/root:*:/' /etc/shadow && \
     addgroup -g 10000 pvmigrate && \
     adduser -D -u 10000 -G pvmigrate -h /home/pvmigrate pvmigrate && \

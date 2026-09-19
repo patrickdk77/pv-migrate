@@ -56,7 +56,7 @@ func TestCompleteRsyncSessionOnVanishedFiles(t *testing.T) {
 
 	var vanished bool
 
-	require.NoError(t, completeRsyncSession(ctx, &stubExitError{status: 24}, progressLogger, &vanished))
+	require.NoError(t, completeMoverSession(ctx, &stubExitError{status: 24}, rsyncPolicy(), progressLogger, &vanished))
 	assert.True(t, vanished)
 
 	select {
@@ -77,16 +77,16 @@ func TestCompleteRsyncSessionOnFailure(t *testing.T) {
 
 	var vanished bool
 
-	err := completeRsyncSession(t.Context(), &stubExitError{status: 23}, progressLogger, &vanished)
+	err := completeMoverSession(t.Context(), &stubExitError{status: 23}, rsyncPolicy(), progressLogger, &vanished)
 	require.Error(t, err)
 	assert.False(t, vanished)
 
-	var sessionErr *rsyncRunError
+	var sessionErr *moverRunError
 
 	require.ErrorAs(t, err, &sessionErr)
 	assert.Contains(t, sessionErr.Error(), "Process exited with status 23")
 
-	enriched := rsyncSessionError(sessionErr.err, []string{"some raw line"})
+	enriched := moverSessionError(rsyncPolicy(), sessionErr.err, []string{"some raw line"})
 	assert.Contains(t, enriched.Error(), `rsync documents this exit code as: Partial transfer due to error`)
 }
 
@@ -109,7 +109,11 @@ func TestLineTailCapturesAtTheSource(t *testing.T) {
 func TestRsyncSessionErrorKeepsTheRawOutput(t *testing.T) {
 	t.Parallel()
 
-	err := rsyncSessionError(&stubExitError{status: 12}, []string{"rsync: connection unexpectedly closed", "tail"})
+	err := moverSessionError(
+		rsyncPolicy(),
+		&stubExitError{status: 12},
+		[]string{"rsync: connection unexpectedly closed", "tail"},
+	)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), `rsync documents this exit code as: Error in rsync protocol data stream`)
@@ -121,7 +125,7 @@ func TestRsyncSessionErrorKeepsTheRawOutput(t *testing.T) {
 func TestRsyncSessionErrorWithoutAnExitStatus(t *testing.T) {
 	t.Parallel()
 
-	err := rsyncSessionError(io.ErrUnexpectedEOF, nil)
+	err := moverSessionError(rsyncPolicy(), io.ErrUnexpectedEOF, nil)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.NotContains(t, err.Error(), "rsync documents")
 }

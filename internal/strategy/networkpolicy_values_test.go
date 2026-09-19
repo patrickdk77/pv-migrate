@@ -49,8 +49,13 @@ func TestTwoReleaseValuesFollowNetworkPolicyPermission(t *testing.T) {
 
 	side := componentSide{info: pvcInfoForTest("ns", "pvc"), mountPath: srcMountPath, readOnly: true}
 	values := map[string]any{
-		sshdComponent:  buildSshdHelmValues(side, "ssh-ed25519 AAAA"),
-		rsyncComponent: buildRsyncHelmValues(side, "rsync -a '/source/' '/dest/'", "key", "/tmp/id_ed25519"),
+		sshdComponent: buildSshdHelmValues(side, "ssh-ed25519 AAAA"),
+		rsyncComponent: buildRsyncHelmValues(
+			side,
+			rsyncMover("rsync -a '/source/' '/dest/'"),
+			"key",
+			"/tmp/id_ed25519",
+		),
 	}
 
 	helm.DisableNetworkPoliciesWhereForbidden(t.Context(), values, denyAll, slogt.New(t))
@@ -78,7 +83,7 @@ func TestMountValuesNeedNoNetworkPolicyCheck(t *testing.T) {
 		DestInfo:   pvcInfoForTest("ns", "dest"),
 	}
 
-	values := buildMountHelmValues(mig, "rsync -a '/source/' '/dest/'")
+	values := buildMountHelmValues(mig, rsyncMover("rsync -a '/source/' '/dest/'"))
 
 	neverAsked := func(_ context.Context, namespace string) (bool, error) {
 		t.Fatalf("the mount pod uses no network, its values should not be checked (asked about %q)", namespace)

@@ -169,6 +169,12 @@ rsync:
   command: ""
   # -- Extra args to be appended to the rsync command. Setting this might cause the tool to not function properly.
   extraArgs: ""
+  # -- Exit codes the job treats as a success, as a shell case pattern (set by pv-migrate from the data mover in use)
+  toleratedExitCodes: "24"
+  # -- Line the job prints when it treats one of those as a success, which the client scans the log for
+  toleratedMarker: "pv-migrate: some source files vanished during the transfer; treated as success"
+  # -- Exit codes the job stops on instead of retrying, as a shell case pattern
+  noRetryExitCodes: "1"
 
   # -- Namespace to run Rsync pod in
   namespace: ""

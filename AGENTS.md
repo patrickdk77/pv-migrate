@@ -21,7 +21,9 @@ A CLI and kubectl plugin that moves the *contents* of a Kubernetes PersistentVol
 
 The premise is that a PVC is two things: an API object, which is trivial to recreate, and data in a storage backend, which is not.
 Everything here exists to move the second one, and it does that by running someone else's proven data mover inside the cluster rather than reimplementing one.
-There are two workflows: PVC to PVC directly over rsync, and PVC to and from bucket storage over rclone.
+There are two workflows: PVC to PVC directly, and PVC to and from bucket storage over rclone.
+The first one takes either of two data movers, rsync or tar, chosen with `--mover`; that choice is independent of the strategies below, which decide how the two sides reach each other rather than what moves the bytes.
+The exit codes of the two movers mean different things, so each declares its own in its own package and the chart's job script takes them as values; reading one mover's status against the other's table turns a success into a failure.
 
 The tool itself is a one-shot client that owns no state.
 It renders an embedded Helm chart, waits, and uninstalls.
