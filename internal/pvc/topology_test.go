@@ -2,6 +2,7 @@ package pvc_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/component-helpers/scheduling/corev1/nodeaffinity"
 
 	"github.com/utkuozdemir/pv-migrate/internal/pvc"
 )
@@ -144,6 +146,61 @@ func TestRequireNodes(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, affinity, "requiredDuringSchedulingIgnoredDuringExecution",
 		"a volume's topology is a hard limit, not a preference")
+}
+
+// decodeNodeSelector reads the required selector back out of the Helm values,
+// through JSON, which is the shape the chart renders and the API server reads.
+func decodeNodeSelector(t *testing.T, values map[string]any) *corev1.NodeSelector {
+	t.Helper()
+
+	affinity, ok := values["nodeAffinity"].(map[string]any)
+	require.True(t, ok)
+
+	raw, err := json.Marshal(affinity["requiredDuringSchedulingIgnoredDuringExecution"])
+	require.NoError(t, err)
+
+	var selector corev1.NodeSelector
+
+	require.NoError(t, json.Unmarshal(raw, &selector))
+
+	return &selector
+}
+
+// A node field selector takes exactly one value for In, so a pin covering
+// several nodes needs one OR'd term each. The parser below applies the same
+// rule the API server does, which makes it the oracle rather than a restatement
+// of the shape.
+func TestRequireNodes_SeveralNodes(t *testing.T) {
+	t.Parallel()
+
+	selector := decodeNodeSelector(t, pvc.RequireNodes([]string{"node-a", "node-b", "node-c"}))
+
+	_, err := nodeaffinity.NewNodeSelector(selector)
+	require.NoError(t, err)
+
+	require.Len(t, selector.NodeSelectorTerms, 3)
+
+	for _, term := range selector.NodeSelectorTerms {
+		require.Len(t, term.MatchFields, 1)
+		assert.Len(t, term.MatchFields[0].Values, 1)
+	}
+}
+
+// The oracle above passes trivially if it cannot reject anything, so feed it
+// the one term carrying every node that the rule forbids.
+func TestRequireNodes_SeveralValuesInOneTermAreRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := nodeaffinity.NewNodeSelector(&corev1.NodeSelector{
+		NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchFields: []corev1.NodeSelectorRequirement{{
+				Key:      "metadata.name",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{"node-a", "node-b"},
+			}},
+		}},
+	})
+	require.Error(t, err)
 }
 
 // Volumes and nodes are cluster-scoped, and the namespace-scoped account the
