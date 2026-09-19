@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/utkuozdemir/pv-migrate/internal/bucketstorage"
 	"github.com/utkuozdemir/pv-migrate/internal/migration"
 	"github.com/utkuozdemir/pv-migrate/internal/migrator"
 	"github.com/utkuozdemir/pv-migrate/internal/opid"
@@ -39,7 +40,7 @@ const (
 	defaultLoadBalancerTimeout = 2 * time.Minute
 	defaultPath                = "/"
 	// DefaultPrefix is the default global prefix for backup/restore operations in the bucket.
-	DefaultPrefix = "pv-migrate"
+	DefaultPrefix = bucketstorage.DefaultPrefix
 	// DefaultSSHReverseTunnelPort is the default port opened on the source pod's loopback
 	// interface for the SSH reverse tunnel. Chosen below the IANA ephemeral range (49152–65535)
 	// and below the typical Linux ephemeral range (32768–60999) to minimise collision risk.

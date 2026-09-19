@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/utkuozdemir/pv-migrate/internal/archive"
+	"github.com/utkuozdemir/pv-migrate/internal/flush"
 	"github.com/utkuozdemir/pv-migrate/internal/rclone"
 	"github.com/utkuozdemir/pv-migrate/pvmigrate"
 )
@@ -31,6 +34,15 @@ const (
 	FlagPath                  = "path"
 	FlagRcloneExtraArgs       = "rclone-extra-args"
 	FlagDeleteExtraneousFiles = "delete-extraneous-files"
+	FlagArchiveFile           = "archive-file"
+	FlagCompressionLevel      = "compression-level"
+	FlagSnapshot              = "snapshot"
+	FlagSnapshotClass         = "snapshot-class"
+	FlagKeepSnapshot          = "keep-snapshot"
+	FlagFromSnapshot          = "from-snapshot"
+	FlagFlush                 = "flush"
+	FlagFlushContainer        = "flush-container"
+	FlagFlushCommand          = "flush-command"
 
 	envS3AccessKey           = "PV_MIGRATE_S3_ACCESS_KEY"
 	envS3SecretKey           = "PV_MIGRATE_S3_SECRET_KEY" //nolint:gosec // Environment variable name, not a secret.
@@ -77,12 +89,67 @@ func buildBackupCmd(logger **slog.Logger, imageTag, chartVersion string) (*cobra
 	)
 
 	setRawConfigFlags(cmd, &backup.RcloneConfigFile, &backup.Remote)
+	setArchiveFlags(cmd, &backup.ArchiveFile, &backup.CompressionLevel)
+	setSnapshotFlags(cmd, &backup)
+
+	if err := setSnapshotFlagCompletions(cmd); err != nil {
+		return nil, err
+	}
 
 	if err := setBucketStorageFlagCompletions(cmd); err != nil {
 		return nil, err
 	}
 
 	return cmd, nil
+}
+
+// setArchiveFlags adds the flags that select the archive workflow. They apply to
+// backup and restore alike, so both commands register them from here.
+func setArchiveFlags(cmd *cobra.Command, archiveFile *string, level *int) {
+	flags := cmd.Flags()
+
+	flags.StringVar(archiveFile, FlagArchiveFile, *archiveFile,
+		"Write the volume to one tar file: s3://<bucket>/<key> streamed to S3 with the S3 flags' credentials, "+
+			"<claim>:<path> on a claim, or a bare path inside the job pod. Compression follows the extension ("+
+			strings.Join(archive.Extensions(), ", ")+"). "+
+			"strftime tokens such as %Y-%m-%d_%H%M are expanded")
+	flags.IntVar(level, FlagCompressionLevel, *level,
+		"Compression level for --archive-file, the compressor's own default when unset")
+}
+
+// setSnapshotFlags adds the flags that make a backup read a point-in-time copy
+// instead of the live claim. They are backup-only: a restore has nothing to
+// snapshot.
+func setSnapshotFlags(cmd *cobra.Command, backup *pvmigrate.Backup) {
+	flags := cmd.Flags()
+
+	flags.BoolVar(&backup.Snapshot, FlagSnapshot, backup.Snapshot,
+		"Cut a VolumeSnapshot of the claim and back up a clone of it, then remove both")
+	flags.StringVar(&backup.SnapshotClass, FlagSnapshotClass, backup.SnapshotClass,
+		"VolumeSnapshotClass for --snapshot, the cluster default when unset")
+	flags.BoolVar(&backup.KeepSnapshot, FlagKeepSnapshot, backup.KeepSnapshot,
+		"Leave the VolumeSnapshot in place after the backup")
+	flags.StringVar(&backup.FromSnapshot, FlagFromSnapshot, backup.FromSnapshot,
+		"Back up a clone of this existing VolumeSnapshot instead of cutting a new one")
+	flags.StringVar(&backup.Flush, FlagFlush, backup.Flush,
+		"Quiesce the database in the pod that has the claim mounted while the snapshot is cut, "+
+			"one of: "+strings.Join(flush.Kinds(), ", ")+". Implies --snapshot")
+	flags.StringVar(&backup.FlushContainer, FlagFlushContainer, backup.FlushContainer,
+		"Container to run the --flush client in, for a pod with more than one")
+	flags.StringSliceVar(&backup.FlushCommand, FlagFlushCommand, backup.FlushCommand,
+		"Replace the client command --flush runs in the database container, for a kind that runs one")
+}
+
+func setSnapshotFlagCompletions(cmd *cobra.Command) error {
+	err := cmd.RegisterFlagCompletionFunc(FlagFlush,
+		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return flush.Kinds(), cobra.ShellCompDirectiveNoFileComp
+		})
+	if err != nil {
+		return fmt.Errorf("failed to register completion for --%s: %w", FlagFlush, err)
+	}
+
+	return nil
 }
 
 func runBackup(cmd *cobra.Command, backup *pvmigrate.Backup, logger *slog.Logger) error {
@@ -140,6 +207,7 @@ func buildRestoreCmd(logger **slog.Logger, imageTag, chartVersion string) (*cobr
 
 	setRawConfigFlags(cmd, &restore.RcloneConfigFile, &restore.Remote)
 	setRestoreDeleteFlags(cmd, &restore.DeleteExtraneousFiles)
+	setArchiveFlags(cmd, &restore.ArchiveFile, &restore.CompressionLevel)
 
 	if err := setBucketStorageFlagCompletions(cmd); err != nil {
 		return nil, err

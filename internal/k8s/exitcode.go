@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/utkuozdemir/pv-migrate/internal/archive"
 	"github.com/utkuozdemir/pv-migrate/internal/console"
 	"github.com/utkuozdemir/pv-migrate/internal/rclone"
 	"github.com/utkuozdemir/pv-migrate/internal/rsync"
@@ -193,7 +194,9 @@ func dataMoverContainer(jobName string) string {
 	switch {
 	case strings.HasSuffix(jobName, rsyncJobSuffix):
 		return "rsync"
-	case strings.HasSuffix(jobName, rcloneJobSuffix):
+	case strings.HasSuffix(jobName, rcloneJobSuffix), strings.HasSuffix(jobName, tarJobSuffix):
+		// A tar job runs in the chart's rclone component, so its container
+		// carries that name whichever mover the command actually is.
 		return "rclone"
 	default:
 		return ""
@@ -208,6 +211,8 @@ func interpretExitCode(jobName string, code int) string {
 		return rsync.Interpret(code)
 	case strings.HasSuffix(jobName, rcloneJobSuffix):
 		return rclone.Interpret(code)
+	case strings.HasSuffix(jobName, tarJobSuffix):
+		return archive.Interpret(code)
 	default:
 		return ""
 	}

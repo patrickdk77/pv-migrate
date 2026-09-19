@@ -65,6 +65,15 @@ type Restore struct {
 	// RcloneExtraArgs are extra flags appended to the rclone command after the built-in progress flags.
 	RcloneExtraArgs string
 
+	// ArchiveFile selects the archive workflow: the volume is written to or
+	// read from one tar file instead of being synced to a bucket. Its value is
+	// "<claim>:<path>" for a file on a claim, or a bare path for one on this
+	// process's own filesystem. Compression comes from the path's extension,
+	// and strftime-style tokens in it are expanded when the operation runs.
+	ArchiveFile string
+	// CompressionLevel overrides the compressor's own default. Zero uses it.
+	CompressionLevel int
+
 	DeleteExtraneousFiles bool
 	IgnoreMounted         bool
 	NonRoot               bool
@@ -161,6 +170,8 @@ func toRestoreRequest(restore *Restore) *bucketstorage.Request {
 		RcloneConfigFile:      restore.RcloneConfigFile,
 		Remote:                restore.Remote,
 		RcloneExtraArgs:       restore.RcloneExtraArgs,
+		ArchiveFile:           restore.ArchiveFile,
+		CompressionLevel:      restore.CompressionLevel,
 		HelmTimeout:           restore.HelmTimeout,
 		HelmValuesFiles:       restore.HelmValuesFiles,
 		HelmValues:            restore.HelmValues,

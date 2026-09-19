@@ -51,9 +51,10 @@ func FindJobPod(ctx context.Context, cli kubernetes.Interface, job *batchv1.Job)
 const (
 	rsyncJobSuffix  = "-rsync"
 	rcloneJobSuffix = "-rclone"
+	tarJobSuffix    = "-tar"
 )
 
-var jobSuffixes = []string{rsyncJobSuffix, rcloneJobSuffix}
+var jobSuffixes = []string{rsyncJobSuffix, rcloneJobSuffix, tarJobSuffix}
 
 // FindDataMoverJob finds the data mover job (rsync or rclone) for a migration by listing
 // all Helm-managed jobs and matching by the release name prefix plus a known suffix.

@@ -2,7 +2,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "pv-migrate.fullname" . }}-rclone
+  name: {{ include "pv-migrate.fullname" . }}-{{ .Values.rclone.jobSuffix }}
   namespace: {{ .Values.rclone.namespace }}
   labels:
     app.kubernetes.io/component: rclone
@@ -67,6 +67,10 @@ spec:
 
               if [ $rc -eq 0 ]; then
                 echo '{{ .Values.rclone.metadataBase64 }}' | base64 -d > /tmp/metadata.yaml
+                {{- if .Values.rclone.metadataLocalPath }}
+                cp /tmp/metadata.yaml "$PV_MIGRATE_METADATA_LOCAL_PATH"
+                metadata_rc=$?
+                {{- else }}
                 n=0
                 while [ "$n" -le "$retries" ]
                 do
@@ -78,6 +82,7 @@ spec:
                   echo "metadata upload attempt $n/$attempts failed, waiting $period seconds before trying again"
                   sleep $period
                 done
+                {{- end }}
                 # The metadata object is how a restore finds this backup, so a backup
                 # without it is not a backup. Its failure becomes the job's failure.
                 if [ $metadata_rc -ne 0 ]; then
@@ -101,8 +106,14 @@ spec:
           env:
             - name: PV_MIGRATE_CONFIG_PATH
               value: {{ .Values.rclone.configMountPath | quote }}
+            {{- with .Values.rclone.metadataRemotePath }}
             - name: PV_MIGRATE_METADATA_REMOTE_PATH
-              value: {{ .Values.rclone.metadataRemotePath | quote }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.rclone.metadataLocalPath }}
+            - name: PV_MIGRATE_METADATA_LOCAL_PATH
+              value: {{ . | quote }}
+            {{- end }}
           {{- end }}
           securityContext:
             {{- toYaml .Values.rclone.securityContext | nindent 12 }}

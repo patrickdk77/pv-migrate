@@ -20,6 +20,7 @@ import (
 	"github.com/utkuozdemir/pv-migrate/internal/k8s"
 	"github.com/utkuozdemir/pv-migrate/internal/narrate"
 	"github.com/utkuozdemir/pv-migrate/internal/opid"
+	"github.com/utkuozdemir/pv-migrate/internal/snapshot"
 )
 
 func buildCleanupCmd(logger **slog.Logger) *cobra.Command {
@@ -123,7 +124,7 @@ func runCleanup(
 		}
 	}
 
-	return uninstallReleases(releases, client, logger)
+	return uninstallReleases(ctx, releases, client, logger)
 }
 
 func checkNoActiveJobs(
@@ -155,7 +156,9 @@ func checkNoActiveJobs(
 	return nil
 }
 
-func uninstallReleases(releases []release.Releaser, client *k8s.ClusterClient, logger *slog.Logger) error {
+func uninstallReleases(
+	ctx context.Context, releases []release.Releaser, client *k8s.ClusterClient, logger *slog.Logger,
+) error {
 	for _, rel := range releases {
 		acc, err := release.NewAccessor(rel)
 		if err != nil {
@@ -171,6 +174,33 @@ func uninstallReleases(releases []release.Releaser, client *k8s.ClusterClient, l
 			narrate.Detail(logger, 1).
 				Info(fmt.Sprintf("🧹 removed release %s from namespace %s", acc.Name(), acc.Namespace()))
 		}
+
+		// A snapshot-backed run also leaves a VolumeSnapshot and a cloned
+		// claim, which are not part of the release and carry its label.
+		if err := removeSnapshotLeftovers(ctx, client, acc.Name(), acc.Namespace(), logger); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func removeSnapshotLeftovers(
+	ctx context.Context, client *k8s.ClusterClient, releaseName, namespace string, logger *slog.Logger,
+) error {
+	snapClient, err := snapshot.New(client.RestConfig, client.KubeClient)
+	if err != nil {
+		return err
+	}
+
+	removed, err := snapClient.DeleteLabeled(ctx, namespace,
+		"app.kubernetes.io/instance="+releaseName)
+	if err != nil {
+		return fmt.Errorf("failed to remove the snapshot leftovers of %s: %w", releaseName, err)
+	}
+
+	for _, name := range removed {
+		narrate.Detail(logger, 1).Info(fmt.Sprintf("🧹 removed %s from namespace %s", name, namespace))
 	}
 
 	return nil

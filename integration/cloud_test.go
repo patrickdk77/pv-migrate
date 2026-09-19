@@ -91,15 +91,6 @@ func envOrDefault(key, fallback string) string {
 }
 
 // skipOrFail skips the test locally but fails in CI when cloud tests are required.
-func skipOrFail(t *testing.T, msg, mustRunEnv string) {
-	t.Helper()
-
-	if os.Getenv(mustRunEnv) != "" {
-		t.Fatalf("%s (%s is set)", msg, mustRunEnv)
-	}
-
-	t.Skip(msg)
-}
 
 // cloudRoundTrip performs a backup-wipe-restore-verify cycle.
 // The template provides backend-specific fields; common fields are filled in automatically.

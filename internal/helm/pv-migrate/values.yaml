@@ -264,7 +264,14 @@ rclone:
     #  readOnly: false
     #  mountPath: /data
 
+  # -- Suffix of the Job's name, naming the data mover it runs: rclone, or tar
+  # for an archive. pv-migrate reads the exit code and the progress by it (set
+  # by pv-migrate)
+  jobSuffix: rclone
   # -- Base64-encoded metadata YAML to upload after successful sync (set by pv-migrate)
   metadataBase64: ""
   # -- Remote path for the metadata file (set by pv-migrate)
   metadataRemotePath: ""
+  # -- Path inside a mounted volume for the metadata file, used by the archive
+  # workflow instead of metadataRemotePath (set by pv-migrate)
+  metadataLocalPath: ""

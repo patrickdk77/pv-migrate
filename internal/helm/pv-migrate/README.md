@@ -34,8 +34,10 @@ The helm chart of pv-migrate
 | rclone.imagePullSecrets | list | `[]` | Rclone image pull secrets |
 | rclone.jobAnnotations | object | `{}` | Rclone job annotations |
 | rclone.jobLabels | object | `{}` | Rclone job labels |
+| rclone.jobSuffix | string | `"rclone"` | Suffix of the Job's name, naming the data mover it runs: rclone, or tar for an archive. pv-migrate reads the exit code and the progress by it (set by pv-migrate) |
 | rclone.maxRetries | int | `3` | Number of retries to run rclone command |
 | rclone.metadataBase64 | string | `""` | Base64-encoded metadata YAML to upload after successful sync (set by pv-migrate) |
+| rclone.metadataLocalPath | string | `""` | Path inside a mounted volume for the metadata file, used by the archive workflow instead of metadataRemotePath (set by pv-migrate) |
 | rclone.metadataRemotePath | string | `""` | Remote path for the metadata file (set by pv-migrate) |
 | rclone.namespace | string | `""` | Namespace to run Rclone pod in |
 | rclone.networkPolicy.enabled | bool | `true` | Create an allow-all network policy for the Rclone pod, so that it works in a default-deny namespace. pv-migrate turns this off on its own when it is not allowed to create network policies |

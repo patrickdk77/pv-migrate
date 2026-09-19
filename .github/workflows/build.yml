@@ -247,7 +247,50 @@ jobs:
             --image=quay.io/minio/mc:${MC_VERSION} \
             --command -- sh -c "mc alias set test http://minio:9000 minioadmin minioadmin && mc mb test/pv-migrate-test"
 
-      - name: Run backup and cloud tests
+      - name: Install snapshot support
+        env:
+          # renovate: depName=kubernetes-csi/external-snapshotter datasource=github-releases
+          SNAPSHOTTER_VERSION: v8.6.0
+          # renovate: depName=kubernetes-csi/csi-driver-host-path datasource=github-releases
+          HOSTPATH_VERSION: v1.18.0
+        run: |
+          set -euo pipefail
+
+          # The VolumeSnapshot API is a set of CRDs plus a controller, neither
+          # of which ships with Kubernetes, and the default storage class
+          # cannot snapshot. Both are needed before the snapshot and flush
+          # suites can do anything.
+          SNAP="https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}"
+          for crd in volumesnapshotclasses volumesnapshotcontents volumesnapshots; do
+            kubectl apply -f "${SNAP}/client/config/crd/snapshot.storage.k8s.io_${crd}.yaml"
+          done
+          kubectl apply -f "${SNAP}/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml"
+          kubectl apply -f "${SNAP}/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml"
+          kubectl -n kube-system rollout status deployment/snapshot-controller --timeout=180s
+
+          # A CSI driver that can actually cut one.
+          curl -sSL "https://github.com/kubernetes-csi/csi-driver-host-path/archive/refs/tags/${HOSTPATH_VERSION}.tar.gz" \
+            | tar xz
+          "csi-driver-host-path-${HOSTPATH_VERSION#v}/deploy/kubernetes-latest/deploy.sh"
+          kubectl apply -f "csi-driver-host-path-${HOSTPATH_VERSION#v}/examples/csi-storageclass.yaml"
+          kubectl apply -f "csi-driver-host-path-${HOSTPATH_VERSION#v}/examples/csi-volumesnapshotclass.yaml"
+
+          # Name them here rather than trusting the manifests: the suites are
+          # pointed at these exact names by the step below.
+          kubectl get storageclass csi-hostpath-sc
+          kubectl get volumesnapshotclass csi-hostpath-snapclass
+
+      - name: Run snapshot and flush tests
+        env:
+          RCLONE_IMAGE: integration-test-rclone:${{ steps.vars.outputs.sha }}
+          PVMIG_TEST_STORAGE_CLASS: csi-hostpath-sc
+          PVMIG_TEST_SNAPSHOT_CLASS: csi-hostpath-snapclass
+          # The infrastructure above is installed right here, so a skip would
+          # mean the install silently failed.
+          PVMIG_TEST_SNAPSHOT_MUST_RUN: "true"
+        run: go test -tags integration -count=1 -timeout 45m -v ./integration/ -run 'TestSnapshot|TestFlush'
+
+      - name: Run backup, archive and cloud tests
         env:
           RCLONE_IMAGE: integration-test-rclone:${{ steps.vars.outputs.sha }}
           # Fail (not skip) each cloud test only when that provider's secrets are available.
@@ -258,7 +301,7 @@ jobs:
           CLOUD_TEST_S3_SECRET_KEY: ${{ secrets.CLOUD_TEST_S3_SECRET_KEY }}
           CLOUD_TEST_GCS_SERVICE_ACCOUNT_JSON: ${{ secrets.CLOUD_TEST_GCS_SERVICE_ACCOUNT_JSON }}
           CLOUD_TEST_AZURE_STORAGE_KEY: ${{ secrets.CLOUD_TEST_AZURE_STORAGE_KEY }}
-        run: go test -tags integration,integration_cloud -count=1 -coverpkg=./... -coverprofile=coverage.txt -covermode=atomic -timeout 15m -v ./integration/ -run 'TestBackup|TestCloud'
+        run: go test -tags integration,integration_cloud -count=1 -coverpkg=./... -coverprofile=coverage.txt -covermode=atomic -timeout 20m -v ./integration/ -run 'TestBackup|TestCloud|TestArchive'
 
       - name: Gather cluster diagnostics
         if: failure()
