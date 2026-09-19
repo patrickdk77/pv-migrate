@@ -3,7 +3,7 @@ sshd:
   enabled: false
   image:
     # -- SSHD image repository
-    repository: docker.io/utkuozdemir/pv-migrate-sshd
+    repository: docker.patrickdk.com/dswett/pv-migrate-sshd
     # -- SSHD image pull policy
     pullPolicy: IfNotPresent
     # -- SSHD image tag (overridden at runtime by pv-migrate to match the CLI version)
@@ -100,7 +100,7 @@ rsync:
   enabled: false
   image:
     # -- Rsync image repository
-    repository: docker.io/utkuozdemir/pv-migrate-rsync
+    repository: docker.patrickdk.com/dswett/pv-migrate-rsync
     # -- Rsync image pull policy
     pullPolicy: IfNotPresent
     # -- Rsync image tag (overridden at runtime by pv-migrate to match the CLI version)
@@ -186,7 +186,7 @@ rclone:
   enabled: false
   image:
     # -- Rclone image repository
-    repository: docker.io/utkuozdemir/pv-migrate-rclone
+    repository: docker.patrickdk.com/dswett/pv-migrate-rclone
     # -- Rclone image pull policy
     pullPolicy: IfNotPresent
     # -- Rclone image tag (overridden at runtime by pv-migrate to match the CLI version)

@@ -69,13 +69,13 @@ scoop install pv-migrate/pv-migrate
 
 ## Docker
 
-The CLI is also published as a container image, on [Docker Hub](https://hub.docker.com/r/utkuozdemir/pv-migrate) and on GHCR as `ghcr.io/utkuozdemir/pv-migrate`.
+The CLI is also published as a container image, as `docker.patrickdk.com/dswett/pv-migrate`.
 It needs a kubeconfig, so mount one in and point `KUBECONFIG` at it:
 
 ```bash
 docker run --rm -it \
   -v "$HOME/.kube/config:/kubeconfig:ro" -e KUBECONFIG=/kubeconfig \
-  utkuozdemir/pv-migrate:<IMAGE_TAG> --source <source-pvc> --dest <dest-pvc>
+  docker.patrickdk.com/dswett/pv-migrate:<IMAGE_TAG> --source <source-pvc> --dest <dest-pvc>
 ```
 
 The image is built from scratch and has no shell, so run the binary directly as shown.
