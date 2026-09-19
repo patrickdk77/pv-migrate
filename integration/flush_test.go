@@ -118,7 +118,16 @@ func scyllaDatabase() database {
 		kind:     "scylladb",
 		image:    "scylladb/scylla:6.2",
 		dataPath: "/var/lib/scylla",
-		args:     []string{"--smp", "1", "--memory", "1G", "--overprovisioned", "1", "--developer-mode", "1"},
+		// The address is pinned because the image derives it from
+		// `hostname -i` when it is not given, and interpolates the result
+		// into --listen-address unquoted. On a dual-stack pod that command
+		// prints both addresses, so Scylla is handed two positional
+		// arguments and refuses to start. Nothing here reaches this node
+		// over the network; the probe and the queries exec into its pod.
+		args: []string{
+			"--smp", "1", "--memory", "1G", "--overprovisioned", "1", "--developer-mode", "1",
+			"--listen-address", "127.0.0.1", "--rpc-address", "127.0.0.1", "--seeds", "127.0.0.1",
+		},
 		probeCmd: `nodetool status | grep -q '^UN'`,
 		seedCmd: `cqlsh -e "CREATE KEYSPACE IF NOT EXISTS app WITH replication=` +
 			`{'class':'SimpleStrategy','replication_factor':1}; ` +

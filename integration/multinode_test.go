@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/utkuozdemir/pv-migrate/internal/k8s"
+	"github.com/utkuozdemir/pv-migrate/internal/pvc"
 	"github.com/utkuozdemir/pv-migrate/pvmigrate"
 )
 
@@ -122,6 +123,39 @@ func testClaimsOnTheSameNode(t *testing.T, infra *backupTestInfra, nodes []strin
 	assert.Equal(t, before, fingerprint(t, infra, ns, "dest-pod"))
 }
 
+// requireNodeLocalVolume skips unless a claim's volume lives on exactly one
+// node, which the refusal below depends on.
+//
+// A replicated or network-attached volume is reachable from several nodes, so
+// a clone of it intersects with the archive claim's node and one pod really
+// can mount both. The run then succeeds, and that is the right answer rather
+// than a failure: the clone still inherited its source volume's topology,
+// that topology is simply not restrictive. Only node-local storage can
+// produce the refusal.
+func requireNodeLocalVolume(t *testing.T, infra *backupTestInfra, ns, claimName, class string) {
+	t.Helper()
+
+	claim, err := infra.cli.KubeClient.CoreV1().PersistentVolumeClaims(ns).
+		Get(t.Context(), claimName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	allowed, err := pvc.AllowedNodesFor(t.Context(), infra.cli.KubeClient, claim)
+	require.NoError(t, err)
+
+	if len(allowed) == 1 {
+		return
+	}
+
+	where := fmt.Sprintf("%d nodes", len(allowed))
+	if allowed == nil {
+		where = "any node"
+	}
+
+	t.Skipf("storage class %s puts a volume on %s, and this case needs a volume "+
+		"bound to one node; nothing here is wrong, the refusal it asserts "+
+		"cannot arise on storage every node can reach", class, where)
+}
+
 // testSnapshotCloneTopology is the case a "which pod has this mounted" check
 // cannot see. The backup reads a clone of a snapshot, and that clone has never
 // been mounted by anything, yet its volume is pinned to the node its snapshot
@@ -146,6 +180,8 @@ func testSnapshotCloneTopology(t *testing.T, infra *backupTestInfra, nodes []str
 		"test-pvc", "test-pod", nodes[0], class, archiveSeedCmd()))
 	require.NoError(t, provisionPinnedPod(t.Context(), infra.cli, ns,
 		"archive-pvc", "archive-pod", nodes[1], class, ""))
+
+	requireNodeLocalVolume(t, infra, ns, "test-pvc", class)
 
 	backup := archiveBackup(t, infra, ns, "archive-pvc:/db.tar.zst")
 	backup.Snapshot = true
