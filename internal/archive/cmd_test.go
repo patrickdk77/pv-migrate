@@ -24,7 +24,7 @@ func TestBuild_BackupZstd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(
 		t,
-		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T0 -3' "+
+		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T4 -3' "+
 			"-f '/dest/my-pvc.tar.zst' -C '/data' .",
 		result,
 	)
@@ -43,7 +43,7 @@ func TestBuild_BackupGzipWithLevel(t *testing.T) {
 
 	result, err := cmd.Build()
 	require.NoError(t, err)
-	assert.Contains(t, result, "-I 'gzip -9'")
+	assert.Contains(t, result, "-I 'pigz -p 4 -9'")
 }
 
 func TestBuild_BackupUncompressed(t *testing.T) {
@@ -65,6 +65,66 @@ func TestBuild_BackupUncompressed(t *testing.T) {
 			"-f '/dest/my-pvc.tar' -C '/data' .",
 		result,
 	)
+}
+
+// A restore only overwrites what the archive holds, so one onto a volume that
+// already has data merges two points in time: files written after the backup
+// survive, and nothing says so. Clean is how a caller asks for a replacement.
+func TestBuild_RestoreClean(t *testing.T) {
+	t.Parallel()
+
+	cmd := archive.Cmd{
+		Direction: archive.DirectionRestore, ArchivePath: "/archive/db.tar.zst",
+		DataPath: "/data", Compression: archive.CompressionZstd, Clean: true,
+	}
+
+	got, err := cmd.Build()
+	require.NoError(t, err)
+
+	assert.Contains(t, got, "find '/data' -mindepth 1")
+	assert.Contains(t, got, "-delete && tar -x",
+		"the clean is chained with && so a refusal stops the restore rather than "+
+			"extracting over a half-emptied volume")
+	assert.Contains(t, got, "-not -path '/data/lost+found'",
+		"the filesystem's own recovery directory is never in the archive, so removing "+
+			"it would be a loss, and a non-root mover cannot remove it anyway")
+	assert.Contains(t, got, "-not -path '/data/lost+found/*'")
+}
+
+// Without it the restore must not remove anything, which is the behaviour
+// every existing caller relies on.
+func TestBuild_RestoreWithoutCleanRemovesNothing(t *testing.T) {
+	t.Parallel()
+
+	cmd := archive.Cmd{
+		Direction: archive.DirectionRestore, ArchivePath: "/archive/db.tar.zst",
+		DataPath: "/data", Compression: archive.CompressionZstd,
+	}
+
+	got, err := cmd.Build()
+	require.NoError(t, err)
+
+	assert.NotContains(t, got, "find ")
+	assert.NotContains(t, got, "-delete")
+}
+
+// The streamed form reads from a pipe instead of a file, and has to clean the
+// same way before anything arrives on it.
+func TestStreamBuild_RestoreClean(t *testing.T) {
+	t.Parallel()
+
+	cmd := archive.StreamCmd{
+		Direction: archive.DirectionRestore, RemotePath: "remote:b/db.tar.zst",
+		DataPath: "/data", ConfigPath: "/etc/rclone/rclone.conf",
+		Compression: archive.CompressionZstd, Clean: true,
+	}
+
+	got, err := cmd.Build()
+	require.NoError(t, err)
+
+	assert.Contains(t, got, "find '/data' -mindepth 1")
+	assert.Contains(t, got, "-delete && rclone",
+		"the clean has to finish before rclone starts writing into the pipe")
 }
 
 func TestBuild_Restore(t *testing.T) {
@@ -287,7 +347,7 @@ func TestStreamBuild_BackupZstd(t *testing.T) {
 		"set -o pipefail; "+
 			`used=$(df -B1 '/data' | awk 'NR==2{print $3}'); `+
 			`chunk=$(( (used * 5 / 4 / 9000 / 1048576) + 1 )); [ "$chunk" -lt 5 ] && chunk=5; `+
-			"tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T0 -3' -f - -C '/data' . | "+
+			"tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T4 -3' -f - -C '/data' . | "+
 			streamRclone+` rcat 'remote:backups/db.tar.zst' --s3-chunk-size "${chunk}M"`,
 		result)
 }
@@ -337,7 +397,7 @@ func TestStreamBuild_RestoreNamesTheDecompressor(t *testing.T) {
 
 	for compression, want := range map[string]string{
 		archive.CompressionZstd: " -I 'zstd' ",
-		archive.CompressionGzip: " -I 'gzip' ",
+		archive.CompressionGzip: " -I 'pigz -p 4' ",
 	} {
 		t.Run(compression, func(t *testing.T) {
 			t.Parallel()

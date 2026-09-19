@@ -352,7 +352,9 @@ func setRawConfigFlags(cmd *cobra.Command, rcloneConfig, remote *string) {
 
 func setRestoreDeleteFlags(cmd *cobra.Command, deleteExtraneousFiles *bool) {
 	cmd.Flags().BoolVarP(deleteExtraneousFiles, FlagDeleteExtraneousFiles, "d", false,
-		"Delete extraneous files on the destination using rclone sync instead of copy")
+		"Make the destination match what is restored rather than merging into it: "+
+			"rclone sync instead of copy for a bucket, and for --archive-file empty the "+
+			"volume before extracting")
 }
 
 func setBucketStorageFlagCompletions(cmd *cobra.Command) error {

@@ -134,7 +134,7 @@ Flags:
       --backend string                    Storage backend: s3, azure, or gcs
       --bucket string                     Bucket (or container) name
       --compression-level int             Compression level for --archive-file, the compressor's own default when unset
-  -d, --delete-extraneous-files           Delete extraneous files on the destination using rclone sync instead of copy
+  -d, --delete-extraneous-files           Make the destination match what is restored rather than merging into it: rclone sync instead of copy for a bucket, and for --archive-file empty the volume before extracting
       --dest string                       Destination PVC name
   -C, --dest-context string               Kubernetes context to use
   -K, --dest-kubeconfig string            Path to the kubeconfig file

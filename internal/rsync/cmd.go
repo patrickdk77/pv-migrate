@@ -63,7 +63,13 @@ func (c *Cmd) args() []string {
 	}
 
 	if c.Compress {
-		args = append(args, "-z")
+		// zstd rather than rsync's zlib default, at its cheapest level: this
+		// is transport, so the only question is whether compressing costs
+		// less than sending the bytes. Measured on 77.7 MiB, zstd -1 ran in
+		// 0.52s against zlib's 0.87s and used 0.61s of CPU against 0.99s.
+		// Both ends are our own images and both carry zstd, which
+		// --compress-choice requires.
+		args = append(args, "--compress", "--compress-choice=zstd", "--compress-level=1")
 	}
 
 	if c.NoChown || c.NonRoot {

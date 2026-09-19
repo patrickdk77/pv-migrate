@@ -339,6 +339,23 @@ Prometheus starts from a raw snapshot too: its blocks are immutable, its WAL is 
 What a raw Prometheus snapshot can lose is the tail of the WAL not yet written back by the kernel.
 If that matters, call its snapshot API (`POST /api/v1/admin/tsdb/snapshot`, which needs `--web.enable-admin-api`) just before the backup; it writes the in-memory head out as a real block under `data/snapshots/`, and that directory has to be removed afterwards by hand.
 
+## Restoring onto a volume that already has data
+
+A restore writes what the backup holds and removes nothing else.
+Files the workload wrote after the backup survive it, so the volume ends up holding two points in time.
+Nothing reports this: the restore succeeds, and the data it carried is correct.
+
+The breakage is usually latent.
+Restoring a MySQL datadir brings the tables back and leaves the `.ibd` file of a table created after the backup, which the restored dictionary knows nothing about.
+The server starts, the rows are right, and `CREATE TABLE` for that name then fails with `Tablespace ... exists` for as long as the file is there.
+
+Pass `--delete-extraneous-files` to replace the volume rather than merge into it.
+For a bucket it runs rclone sync instead of copy; for `--archive-file` it empties the volume before extracting, keeping only the filesystem's own `lost+found`.
+It is destructive, which is why it is opt-in.
+
+A non-root restore cannot empty a directory it may not enter.
+The clean stops there and the restore fails, rather than extracting over a half-emptied volume.
+
 ## Permissions and ownership
 
 Bucket backup and restore copies file contents only.

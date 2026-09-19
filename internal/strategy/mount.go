@@ -97,12 +97,16 @@ func buildRsyncCmdMount(mig *migration.Migration) (string, error) {
 	}
 
 	rsyncCmd := rsync.Cmd{
-		NoChown:   mig.Request.NoChown,
-		NonRoot:   mig.Request.NonRoot,
-		Delete:    mig.Request.DeleteExtraneousFiles,
-		SrcPath:   srcPath,
-		DestPath:  destPath,
-		Compress:  !mig.Request.NoCompress,
+		NoChown:  mig.Request.NoChown,
+		NonRoot:  mig.Request.NonRoot,
+		Delete:   mig.Request.DeleteExtraneousFiles,
+		SrcPath:  srcPath,
+		DestPath: destPath,
+		// Both volumes are mounted in this one pod, so nothing crosses a
+		// network and compressing only costs. rsync applies --compress to a
+		// local transfer all the same: measured on 77.7 MiB it turned 0.12s
+		// and 0.03s of CPU into 0.87s and 0.99s.
+		Compress:  false,
 		ExtraArgs: mig.Request.RsyncExtraArgs,
 	}
 

@@ -539,14 +539,17 @@ func TestParseArchiveTarget_DefaultedPrefixIsNotAConflict(t *testing.T) {
 func TestParseArchiveTarget_MoreConflicts(t *testing.T) {
 	t.Parallel()
 
-	t.Run("delete-extraneous-files on an archive restore", func(t *testing.T) {
+	t.Run("delete-extraneous-files on an archive restore is accepted", func(t *testing.T) {
 		t.Parallel()
 
+		// It used to be refused on the grounds that tar removes nothing.
+		// That left no way to ask for a restore that replaces the volume
+		// rather than merging into it, which silently kept files written
+		// after the backup. The flag now empties the data path first.
 		_, err := parseArchiveTarget(&Request{
 			ArchiveFile: "nfs:/a.tar", Direction: rclone.DirectionRestore, DeleteExtraneousFiles: true,
 		}, refTime())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "--delete-extraneous-files")
+		require.NoError(t, err)
 	})
 
 	t.Run("delete-extraneous-files on an archive backup is ignored", func(t *testing.T) {

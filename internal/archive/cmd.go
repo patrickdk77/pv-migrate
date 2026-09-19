@@ -34,6 +34,18 @@ const (
 	minLevel     = 1
 	maxZstdLevel = 19
 	maxGzipLevel = 9
+
+	// compressThreads is how many threads a compressor is given.
+	//
+	// Not every core, for two reasons. zstd stops scaling early: measured on
+	// 937 MiB at level 3, four threads reach 2.7x and thirty-two reach 3.3x,
+	// because at that speed the reader becomes the bottleneck long before the
+	// compressor does. And a container sees the node's core count rather than
+	// its own CPU limit, so "every core" on a large node means dozens of
+	// threads contending for a fraction of one. pigz does keep scaling, but
+	// zstd on four threads already beats pigz on thirty-two, so a volume that
+	// wants speed should be using zstd rather than more gzip threads.
+	compressThreads = 4
 )
 
 // Compressions returns the accepted compression names, in the order they are
@@ -77,6 +89,9 @@ type Cmd struct {
 	DataPath    string
 	Compression string
 	Level       int
+	// Clean empties the data path before extracting, so that a restore
+	// replaces the volume rather than merging into it. Restore only.
+	Clean bool
 }
 
 // Build produces the full tar command string.
@@ -106,6 +121,11 @@ func (c *Cmd) Build() (string, error) {
 		// --path can name a directory that does not exist yet on the volume,
 		// and tar extracts into a directory rather than creating it.
 		fmt.Fprintf(&builder, "mkdir -p %s && ", shell.Quote(c.DataPath))
+
+		if c.Clean {
+			fmt.Fprintf(&builder, "%s && ", cleanCmd(c.DataPath))
+		}
+
 		builder.WriteString("tar -x --numeric-owner --xattrs " + lostFoundExclude)
 	default:
 		return "", fmt.Errorf("invalid direction: %q, must be %q or %q",
@@ -139,6 +159,25 @@ func (c *Cmd) Build() (string, error) {
 // the mover runs as, because an archive whose contents depend on that could
 // not be restored by the other one.
 const lostFoundExclude = "--exclude=./lost+found"
+
+// cleanCmd empties dataPath, leaving the filesystem's own lost+found alone so
+// that the clean agrees with lostFoundExclude: the archive never carried that
+// directory, so removing it would be a loss the restore could not undo, and a
+// non-root mover cannot remove it anyway.
+//
+// It is chained with && by its callers on purpose. find exits non-zero when it
+// cannot enter a directory, which a non-root mover hits on one it does not
+// own, and by then it has already deleted what it could reach. Stopping there
+// reports a failed restore; carrying on would extract over a half-emptied
+// volume and call it a success, which is the merge this option exists to
+// prevent, only worse.
+func cleanCmd(dataPath string) string {
+	return fmt.Sprintf("find %s -mindepth 1 -not -path %s -not -path %s -delete",
+		shell.Quote(dataPath),
+		shell.Quote(path.Join(dataPath, "lost+found")),
+		shell.Quote(path.Join(dataPath, "lost+found")+"/*"),
+	)
+}
 
 // checkPaths rejects a path the built command could not carry. Both paths carry
 // their flag names so an error points at what to change: the archive path is
@@ -183,9 +222,7 @@ func compressProgram(compression string, level int) (string, error) {
 			return "", err
 		}
 
-		// -T0 uses every core, which keeps zstd off the critical path on the
-		// multi-core nodes a cluster is usually built from.
-		return fmt.Sprintf("zstd -T0 -%d", level), nil
+		return fmt.Sprintf("zstd -T%d -%d", compressThreads, level), nil
 	case CompressionGzip:
 		if level == 0 {
 			level = DefaultGzipLevel
@@ -195,7 +232,7 @@ func compressProgram(compression string, level int) (string, error) {
 			return "", err
 		}
 
-		return fmt.Sprintf("gzip -%d", level), nil
+		return fmt.Sprintf("pigz -p %d -%d", compressThreads, level), nil
 	default:
 		return "", unsupportedCompression(compression)
 	}
@@ -241,6 +278,9 @@ type StreamCmd struct {
 	// --rclone-extra-args the bucket workflow forwards. They land after the
 	// computed --s3-chunk-size, so one given here overrides it.
 	ExtraArgs string
+	// Clean empties the data path before extracting, so that a restore
+	// replaces the volume rather than merging into it. Restore only.
+	Clean bool
 }
 
 // rcloneProgressFlags are the flags the job's log parser expects rclone to
@@ -342,8 +382,13 @@ func (c *StreamCmd) buildBackup(program, rclone string) string {
 func (c *StreamCmd) buildRestore(rclone string) string {
 	var builder strings.Builder
 
-	fmt.Fprintf(&builder, "set -o pipefail; mkdir -p %s && %s cat %s",
-		shell.Quote(c.DataPath), rclone, shell.Quote(c.RemotePath))
+	fmt.Fprintf(&builder, "set -o pipefail; mkdir -p %s && ", shell.Quote(c.DataPath))
+
+	if c.Clean {
+		fmt.Fprintf(&builder, "%s && ", cleanCmd(c.DataPath))
+	}
+
+	fmt.Fprintf(&builder, "%s cat %s", rclone, shell.Quote(c.RemotePath))
 
 	if c.ExtraArgs != "" {
 		fmt.Fprintf(&builder, " %s", c.ExtraArgs)
@@ -367,7 +412,7 @@ func decompressProgram(compression string) string {
 	case CompressionZstd:
 		return "zstd"
 	case CompressionGzip:
-		return "gzip"
+		return fmt.Sprintf("pigz -p %d", compressThreads)
 	default:
 		return ""
 	}

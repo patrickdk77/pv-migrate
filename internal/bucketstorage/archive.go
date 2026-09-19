@@ -86,8 +86,6 @@ func checkArchiveConflicts(req *Request, target archive.Target) error {
 		// only a value someone chose counts.
 		{"--prefix", req.Prefix != "" && req.Prefix != DefaultPrefix},
 		{"--name", req.Name != ""},
-		// tar restores what the archive holds and removes nothing.
-		{"--delete-extraneous-files", req.Direction == rclone.DirectionRestore && req.DeleteExtraneousFiles},
 	}
 
 	if target.InBucket() {
@@ -154,6 +152,7 @@ func buildArchiveCmd(req *Request, target archive.Target, dataPath string) (stri
 		DataPath:    dataPath,
 		Compression: target.Compression,
 		Level:       req.CompressionLevel,
+		Clean:       req.DeleteExtraneousFiles,
 	}
 
 	return cmd.Build()
@@ -276,6 +275,7 @@ func buildMoverCmd(req *Request, target archive.Target, localPath, remotePath st
 			Compression: target.Compression,
 			Level:       req.CompressionLevel,
 			ExtraArgs:   req.RcloneExtraArgs,
+			Clean:       req.DeleteExtraneousFiles,
 		}
 
 		cmdStr, err := streamCmd.Build()
