@@ -347,6 +347,10 @@ Restored files belong to the user the rclone process runs as, and regular files 
 
 Use `--archive-file` or PVC-to-PVC migration if the owners, groups or modes have to survive the copy.
 
+Neither one carries the `lost+found` directory at the root of the volume.
+Every ext4 or xfs filesystem has one, `fsck` writes recovered fragments into it, and only root can read it, so under `--non-root` an archive that included it would fail over a directory holding nothing of yours.
+A directory further down that happens to be called `lost+found` is yours and is carried.
+
 ## Scheduled backups
 
 `pv-migrate backup` can run from a Kubernetes `CronJob`, which gives you scheduled PVC backups to object storage with Kubernetes building blocks only.

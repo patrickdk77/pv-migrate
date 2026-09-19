@@ -52,6 +52,14 @@ func (c *Cmd) args() []string {
 	args := []string{
 		"-av", "--info=progress2,misc0,flist0",
 		"--no-inc-recursive", "-e", shell.Quote(strings.Join(c.sshArgs(), " ")),
+		// The filesystem's own recovery directory, anchored at the transfer
+		// root so a directory a user happens to call lost+found further down
+		// is still copied. Every ext4 or xfs volume has one, owned by root at
+		// mode 700, which a non-root rsync can neither read on the source nor
+		// create on the destination. It holds no user data, and --delete
+		// leaves an excluded path on the receiver alone, so the destination
+		// keeps the one its own filesystem made.
+		"--exclude=/lost+found",
 	}
 
 	if c.Compress {

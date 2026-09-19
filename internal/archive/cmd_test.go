@@ -24,7 +24,7 @@ func TestBuild_BackupZstd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(
 		t,
-		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse -I 'zstd -T0 -3' "+
+		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T0 -3' "+
 			"-f '/dest/my-pvc.tar.zst' -C '/data' .",
 		result,
 	)
@@ -61,7 +61,8 @@ func TestBuild_BackupUncompressed(t *testing.T) {
 	assert.NotContains(t, result, "-I ")
 	assert.Equal(
 		t,
-		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse -f '/dest/my-pvc.tar' -C '/data' .",
+		"mkdir -p '/dest' && tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found "+
+			"-f '/dest/my-pvc.tar' -C '/data' .",
 		result,
 	)
 }
@@ -80,7 +81,7 @@ func TestBuild_Restore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(
 		t,
-		"mkdir -p '/data' && tar -x --numeric-owner --xattrs -f '/dest/my-pvc.tar.zst' -C '/data'",
+		"mkdir -p '/data' && tar -x --numeric-owner --xattrs --exclude=./lost+found -f '/dest/my-pvc.tar.zst' -C '/data'",
 		result,
 	)
 	// tar detects the compression from the archive itself, so naming one here
@@ -286,7 +287,7 @@ func TestStreamBuild_BackupZstd(t *testing.T) {
 		"set -o pipefail; "+
 			`used=$(df -B1 '/data' | awk 'NR==2{print $3}'); `+
 			`chunk=$(( (used * 5 / 4 / 9000 / 1048576) + 1 )); [ "$chunk" -lt 5 ] && chunk=5; `+
-			"tar -c --numeric-owner --xattrs --sparse -I 'zstd -T0 -3' -f - -C '/data' . | "+
+			"tar -c --numeric-owner --xattrs --sparse --exclude=./lost+found -I 'zstd -T0 -3' -f - -C '/data' . | "+
 			streamRclone+` rcat 'remote:backups/db.tar.zst' --s3-chunk-size "${chunk}M"`,
 		result)
 }
@@ -371,7 +372,7 @@ func TestStreamBuild_RestoreZstdExact(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t,
 		"set -o pipefail; mkdir -p '/data' && "+streamRclone+" cat 'remote:backups/db.tar.zst' | "+
-			"tar -x --numeric-owner --xattrs -I 'zstd' -f - -C '/data'",
+			"tar -x --numeric-owner --xattrs --exclude=./lost+found -I 'zstd' -f - -C '/data'",
 		result)
 }
 

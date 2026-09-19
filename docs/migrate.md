@@ -138,11 +138,22 @@ pv-migrate \
 
 `--rsync-push` has no effect on the `mount` and `local` strategies.
 
+Migration skips the `lost+found` directory at the root of the source volume.
+Every ext4 or xfs filesystem has one, `fsck` writes recovered fragments into it, and only root can read it, so copying it would fail a `--non-root` run over a directory holding nothing of yours.
+A directory further down that happens to be called `lost+found` is yours and is copied.
+
 ## Non-root mode
 
 Use `--non-root` on clusters that enforce restricted pod security.
 The containers then run as a non-root user, and rsync skips preserving ownership and directory timestamps.
 
 The migration fails if the non-root user cannot read the source files or cannot write to the destination volume.
+
+It also fails when the two volumes' root directories have different permissions.
+rsync tries to make the destination root match the source root, and the non-root user does not own that directory, so the change is refused and rsync reports a partial transfer.
+Everything below the root still copies, so a run that ends this way has moved the data.
+Volumes from the same storage class normally share a root mode and are unaffected.
+There is no rsync option that keeps permissions everywhere except the transfer root, and turning permissions off entirely would leave stale modes on a destination that already holds the files.
+Either match the destination root's mode to the source's before migrating, or run without `--non-root`.
 
 For further customization of the generated manifests, see the [Helm chart values](../internal/helm/pv-migrate).

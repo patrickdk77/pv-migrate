@@ -298,6 +298,7 @@ func TestArchive(t *testing.T) {
 		"S3RoundTrip":                     testArchiveS3RoundTrip,
 		"S3MultipartUpload":               testArchiveS3Multipart,
 		"MissingArchiveFails":             testArchiveMissingFileFails,
+		"NonRootSkipsLostFound":           testArchiveNonRootLostFound,
 	}
 
 	for name, run := range cases {
@@ -341,6 +342,66 @@ func testArchiveClaimRoundTrip(t *testing.T, infra *backupTestInfra) {
 	require.NoError(t, err)
 	assert.Less(t, atoiOrZero(strings.TrimSpace(blocks)), 64,
 		"a sparse file must come back sparse rather than as its full length of zeroes")
+}
+
+// testArchiveNonRootLostFound is the case a bind-mounted test volume cannot
+// produce on its own.
+//
+// Every ext4 or xfs volume carries a root-owned lost+found at mode 700 that a
+// non-root mover cannot read, and without an exclude tar stops with code 2
+// over a directory holding no user data. The CI storage is a directory rather
+// than a filesystem and has none, so the seed makes one instead of hoping the
+// storage does.
+//
+// The seed is its own rather than archiveSeedCmd's, which exists to prove
+// metadata survives and therefore plants files only uid 999 can read. Those
+// defeat a non-root run on their own and would say nothing about lost+found.
+//
+// It stops at the archive rather than restoring, and reads the members back,
+// because that is what this exclude decides. A non-root restore also has to
+// set modes on a volume root it does not own, which is a separate limit and
+// not this case's subject.
+//
+//nolint:thelper // subtest implementation, not a helper
+func testArchiveNonRootLostFound(t *testing.T, infra *backupTestInfra) {
+	place := newPlacement(t, infra.cli)
+
+	seed := strings.Join([]string{
+		"mkdir -p /volume/sub/lost+found",
+		"echo -n DATA > /volume/data.txt",
+		"echo -n KEEP > /volume/sub/lost+found/mine",
+		"chmod -R a+rX /volume/data.txt /volume/sub",
+		// What mkfs leaves at the root of a real filesystem.
+		"mkdir -p /volume/lost+found",
+		"echo -n RECOVERED > /volume/lost+found/orphan",
+		"chown -R 0:0 /volume/lost+found",
+		"chmod 700 /volume/lost+found",
+	}, " && ")
+
+	ns := seedPlacedPVC(t, infra, place, seed)
+	placePod(t, infra, place, ns, "archive-pvc", "archive-pod")
+
+	// Uncompressed, so the busybox in the inspection pod can list the members.
+	backup := archiveBackup(t, infra, ns, "archive-pvc:/db.tar")
+	backup.NonRoot = true
+
+	require.NoError(t, pvmigrate.RunBackup(t.Context(), backup),
+		"a non-root backup must not fail over the filesystem's own recovery directory")
+
+	listing, err := execInPod(t.Context(), infra.cli, ns, "archive-pod",
+		"tar -tf "+archiveInspectPath+"/db.tar")
+	require.NoError(t, err)
+
+	members := make(map[string]bool)
+	for line := range strings.SplitSeq(listing, "\n") {
+		members[strings.TrimSpace(line)] = true
+	}
+
+	assert.False(t, members["./lost+found/"] || members["./lost+found/orphan"],
+		"the volume's own recovery directory is not user data and must not be archived")
+	assert.True(t, members["./data.txt"], "the rest of the volume still has to be archived")
+	assert.True(t, members["./sub/lost+found/mine"],
+		"the exclude is anchored, so a directory a user calls lost+found further down is still theirs")
 }
 
 // testArchiveCompressionVariants pins that the extension alone selects the

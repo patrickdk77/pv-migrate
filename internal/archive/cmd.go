@@ -101,12 +101,12 @@ func (c *Cmd) Build() (string, error) {
 		fmt.Fprintf(&builder, "mkdir -p %s && ", shell.Quote(path.Dir(c.ArchivePath)))
 		// --sparse keeps a preallocated database file from being read and
 		// stored as its full length of zeroes.
-		builder.WriteString("tar -c --numeric-owner --xattrs --sparse")
+		builder.WriteString("tar -c --numeric-owner --xattrs --sparse " + lostFoundExclude)
 	case DirectionRestore:
 		// --path can name a directory that does not exist yet on the volume,
 		// and tar extracts into a directory rather than creating it.
 		fmt.Fprintf(&builder, "mkdir -p %s && ", shell.Quote(c.DataPath))
-		builder.WriteString("tar -x --numeric-owner --xattrs")
+		builder.WriteString("tar -x --numeric-owner --xattrs " + lostFoundExclude)
 	default:
 		return "", fmt.Errorf("invalid direction: %q, must be %q or %q",
 			c.Direction, DirectionBackup, DirectionRestore)
@@ -128,6 +128,17 @@ func (c *Cmd) Build() (string, error) {
 
 	return builder.String(), nil
 }
+
+// lostFoundExclude keeps the filesystem's own recovery directory out of the
+// archive, anchored so a directory a user happens to call lost+found further
+// down is still carried.
+//
+// Every ext4 or xfs volume has one at its root, owned by root at mode 700, so
+// a non-root mover cannot read it on backup or create it on restore and the
+// run fails over a directory that holds no user data. It is excluded whatever
+// the mover runs as, because an archive whose contents depend on that could
+// not be restored by the other one.
+const lostFoundExclude = "--exclude=./lost+found"
 
 // checkPaths rejects a path the built command could not carry. Both paths carry
 // their flag names so an error points at what to change: the archive path is
@@ -309,7 +320,7 @@ func (c *StreamCmd) buildBackup(program, rclone string) string {
 
 	builder.WriteString("set -o pipefail; ")
 	builder.WriteString(chunkSizing(c.DataPath))
-	builder.WriteString("tar -c --numeric-owner --xattrs --sparse")
+	builder.WriteString("tar -c --numeric-owner --xattrs --sparse " + lostFoundExclude)
 
 	if program != "" {
 		fmt.Fprintf(&builder, " -I %s", shell.Quote(program))
@@ -338,7 +349,7 @@ func (c *StreamCmd) buildRestore(rclone string) string {
 		fmt.Fprintf(&builder, " %s", c.ExtraArgs)
 	}
 
-	builder.WriteString(" | tar -x --numeric-owner --xattrs")
+	builder.WriteString(" | tar -x --numeric-owner --xattrs " + lostFoundExclude)
 
 	if decompressor := decompressProgram(c.Compression); decompressor != "" {
 		fmt.Fprintf(&builder, " -I %s", shell.Quote(decompressor))

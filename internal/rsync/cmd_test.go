@@ -204,6 +204,63 @@ func TestBuiltCommandArgvThroughShell(t *testing.T) {
 	}
 }
 
+// TestBuildExcludesLostFound pins the exclude that lets a non-root transfer
+// finish on a real filesystem.
+//
+// Every ext4 or xfs volume carries a root-owned lost+found at mode 700, which
+// uid 10000 can neither read on the source nor create on the destination, so
+// without this rsync stops with code 23 over a directory holding no user data.
+// The CI storage is a bind-mounted directory and has no lost+found, so only a
+// real volume shows it.
+//
+// The leading slash is the whole point: rsync anchors such a pattern at the
+// transfer root, so a directory a user happens to call lost+found further down
+// is still copied. Real rsync is the oracle for that behaviour and a stand-in
+// cannot be; this asserts the flag reaches rsync intact and as one word.
+func TestBuildExcludesLostFound(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the built command is only ever run by the Linux job container's shell")
+	}
+
+	rsyncDir := fakeRsync(t)
+
+	// Unconditional, because an archive or a destination whose contents
+	// depended on the mover's uid could not be read back by the other.
+	for name, cmd := range map[string]rsync.Cmd{
+		"root": {
+			SrcUseSSH: true, SrcSSHHost: "sshd.ns", SrcSSHUser: "root",
+			SrcPath: "/source/", DestPath: "/dest/",
+		},
+		"non-root": {
+			NonRoot:   true,
+			SrcUseSSH: true, SrcSSHHost: "sshd.ns", SrcSSHUser: "pvmigrate",
+			SrcPath: "/source/", DestPath: "/dest/",
+		},
+		"deleting": {
+			Delete:    true,
+			SrcUseSSH: true, SrcSSHHost: "sshd.ns", SrcSSHUser: "root",
+			SrcPath: "/source/", DestPath: "/dest/",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			built, err := cmd.Build()
+			require.NoError(t, err)
+
+			argv := shellArgv(t, rsyncDir, built)
+
+			assert.Contains(t, argv, "--exclude=/lost+found",
+				"the exclude has to reach rsync as one argument")
+			assert.NotContains(t, argv, "--delete-excluded",
+				"an excluded path must stay on the receiver, so the destination "+
+					"keeps the lost+found its own filesystem made")
+		})
+	}
+}
+
 // fakeRsync writes a stand-in rsync that prints each argument on its own line,
 // and returns the directory holding it.
 //
