@@ -24,6 +24,7 @@ import (
 	"helm.sh/helm/v4/pkg/kube"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/utkuozdemir/pv-migrate/internal/archive"
 	"github.com/utkuozdemir/pv-migrate/internal/console"
 	"github.com/utkuozdemir/pv-migrate/internal/helm"
 	"github.com/utkuozdemir/pv-migrate/internal/k8s"
@@ -33,8 +34,18 @@ import (
 	"github.com/utkuozdemir/pv-migrate/internal/rclone"
 )
 
+// DefaultPrefix is the bucket prefix a backup gets when none is asked for.
+// It lives here rather than in the public package so the archive workflow,
+// which has no prefix, can tell a defaulted one from a chosen one.
+const DefaultPrefix = "pv-migrate"
+
 const (
 	dataMountPath = "/data"
+	// archiveMountPath is where the claim holding the archive file is mounted,
+	// which is a second volume alongside the one being backed up or restored.
+	archiveMountPath = "/archive"
+	// rcloneConfigMountPath is where the chart mounts the generated rclone.conf.
+	rcloneConfigMountPath = "/etc/rclone/rclone.conf"
 	// Keep in sync with the pvmigrate user created in docker/rclone/Dockerfile.
 	nonRootUID = 10000
 )
@@ -81,6 +92,26 @@ type Request struct {
 	Remote                string
 	RcloneExtraArgs       string
 
+	// ArchiveFile selects the archive workflow: the volume is written to or
+	// read from a single tar file instead of being synced to a bucket. Its
+	// value is "<claim>:<path>" for a file on a claim, or a bare path for one
+	// on the filesystem of the process running this. Compression comes from the
+	// path's extension.
+	ArchiveFile      string
+	CompressionLevel int
+
+	// Snapshot config. Snapshot cuts a VolumeSnapshot of the claim and backs
+	// up a clone of it. FromSnapshot names an existing one to clone instead.
+	// Flush quiesces the database in the pod that has the claim mounted while
+	// the snapshot is cut, and names which kind of database it is.
+	Snapshot       bool
+	FromSnapshot   string
+	SnapshotClass  string
+	KeepSnapshot   bool
+	Flush          string
+	FlushContainer string
+	FlushCommand   []string
+
 	HelmTimeout      time.Duration
 	HelmValuesFiles  []string
 	HelmValues       []string
@@ -103,7 +134,7 @@ type Request struct {
 // Run executes a backup or restore operation.
 //
 //nolint:cyclop,funlen
-func Run(ctx context.Context, req *Request) error {
+func Run(ctx context.Context, req *Request) (retErr error) {
 	logger := req.Logger
 
 	// Only the public API defaults the writer, so a direct caller can leave it
@@ -117,12 +148,23 @@ func Run(ctx context.Context, req *Request) error {
 		operationID = opid.Generate()
 	}
 
-	rcloneConf, err := buildRcloneConfig(req)
-	if err != nil {
-		return fmt.Errorf("failed to build rclone config: %w", err)
+	var err error
+
+	var target archive.Target
+
+	if isArchive(req) {
+		if target, err = parseArchiveTarget(req, time.Now()); err != nil {
+			return err
+		}
 	}
 
-	remotePath, err := buildRemotePath(req)
+	if err = validateSnapshotRequest(req); err != nil {
+		return err
+	}
+
+	releaseName := opid.ReleasePrefix + operationID + "-" + req.Direction
+
+	rcloneConf, remotePath, err := resolveTarget(req, target)
 	if err != nil {
 		return err
 	}
@@ -147,64 +189,87 @@ func Run(ctx context.Context, req *Request) error {
 		ns = client.NsInContext
 	}
 
-	pvcInfo, err := pvc.New(ctx, client, ns, req.PVCName)
+	// A snapshot-backed run never mounts the live claim, so a mounted
+	// ReadWriteOncePod claim, which New refuses, is fine as a source.
+	lookup := pvc.New
+	if usesSnapshot(req) {
+		lookup = pvc.NewSource
+	}
+
+	pvcInfo, err := lookup(ctx, client, ns, req.PVCName)
 	if err != nil {
 		return fmt.Errorf("failed to get PVC info: %w", err)
 	}
 
+	// Loaded before any snapshot is cut, so a chart problem costs nothing.
+	helmChart, err := helm.LoadChart(req.ChartVersion)
+	if err != nil {
+		return fmt.Errorf("failed to load helm chart: %w", err)
+	}
+
+	destination := remotePath
+
+	switch {
+	case target.InCluster():
+		destination = target.Claim + ":" + target.Path
+	case target.InBucket():
+		destination = "s3://" + target.Bucket + "/" + target.Path
+	}
+
 	if req.Direction == rclone.DirectionBackup {
-		logger.Info(fmt.Sprintf("📦 Backing up %s/%s to %s", ns, req.PVCName, remotePath))
+		logger.Info(fmt.Sprintf("📦 Backing up %s/%s to %s", ns, req.PVCName, destination))
 	} else {
-		logger.Info(fmt.Sprintf("📥 Restoring %s to %s/%s", remotePath, ns, req.PVCName))
+		logger.Info(fmt.Sprintf("📥 Restoring %s to %s/%s", destination, ns, req.PVCName))
 	}
 
 	details := narrate.Detail(logger, 1)
 	details.Info(fmt.Sprintf("🆔 operation id %s, for status and cleanup", operationID))
 	details.Info("📌 claim " + pvcInfo.Describe())
 
-	if err = handleMounted(pvcInfo, req.IgnoreMounted, details); err != nil {
+	pvcInfo, release, err := resolveSource(ctx, client, req, pvcInfo, releaseName, details, logger)
+	if err != nil {
 		return err
+	}
+
+	defer func() { release(retErr != nil) }()
+
+	var archiveInfo *pvc.Info
+
+	if isArchive(req) {
+		if target.InCluster() {
+			if archiveInfo, err = resolveArchiveClaim(ctx, client, ns, target, pvcInfo); err != nil {
+				return err
+			}
+
+			details.Info("💾 archive claim " + archiveInfo.Describe())
+		} else if !target.InBucket() {
+			// A path with no claim in front of it is a path inside the job's own
+			// container, which is worth saying outright: nothing is mounted
+			// there automatically, and an unmounted path is ephemeral storage
+			// that goes away with the pod, taking the backup with it.
+			details.Warn("🔶 " + target.Path + " is a path inside the job pod. " +
+				"Mount a volume there with a --helm-values file that lists it under rclone.pvcMounts " +
+				"alongside the data mount, or the archive is written to ephemeral storage and lost")
+		}
 	}
 
 	if req.DeleteExtraneousFiles {
 		details.Info("❕ files missing on the source will be deleted from the destination")
 	}
 
-	rcloneCmd := rclone.Cmd{
-		Direction:  req.Direction,
-		RemotePath: remotePath,
-		LocalPath:  localPath,
-		ConfigPath: "/etc/rclone/rclone.conf",
-		ExtraArgs:  req.RcloneExtraArgs,
-		Delete:     req.DeleteExtraneousFiles,
-	}
-
-	cmdStr, err := rcloneCmd.Build()
+	cmdStr, err := buildMoverCmd(req, target, localPath, remotePath)
 	if err != nil {
-		return fmt.Errorf("failed to build rclone command: %w", err)
-	}
-
-	helmChart, err := helm.LoadChart(req.ChartVersion)
-	if err != nil {
-		return fmt.Errorf("failed to load helm chart: %w", err)
+		return err
 	}
 
 	readOnly := req.Direction == rclone.DirectionBackup
 
-	var metadataBase64, metadataRemotePath string
-
-	if shouldUploadMetadata(req) {
-		metadataBase64, err = generateMetadataBase64(ns, req.PVCName)
-		if err != nil {
-			return fmt.Errorf("failed to generate backup metadata: %w", err)
-		}
-
-		metadataRemotePath = rclone.BuildMetadataRemotePath(req.Bucket, req.Prefix, req.Name)
+	meta, err := buildMetadata(req, target, ns)
+	if err != nil {
+		return err
 	}
 
-	helmVals := buildHelmValues(ns, req, pvcInfo, rcloneConf, cmdStr, readOnly, metadataBase64, metadataRemotePath)
-
-	releaseName := opid.ReleasePrefix + operationID + "-" + req.Direction
+	helmVals := buildHelmValues(ns, req, pvcInfo, archiveInfo, rcloneConf, cmdStr, readOnly, meta)
 
 	if err = installHelmChart(ctx, helmChart, pvcInfo, releaseName, helmVals, req, logger); err != nil {
 		// A timed-out install means resources that are stuck rather than absent,
@@ -214,9 +279,32 @@ func Run(ctx context.Context, req *Request) error {
 		return fmt.Errorf("failed to install helm chart: %w", err)
 	}
 
-	jobName := releaseName + "-rclone"
+	jobName := releaseName + "-" + jobSuffix(req)
 
 	return handleJobCompletion(ctx, req, pvcInfo, releaseName, jobName, operationID, logger)
+}
+
+// narrateMoverJob reports the job the release created, named and described by
+// the data mover it actually runs.
+func narrateMoverJob(
+	ctx context.Context,
+	req *Request,
+	pvcInfo *pvc.Info,
+	releaseName string,
+	rcloneVals map[string]any,
+	deeper *slog.Logger,
+) {
+	namespace := helm.ComponentNamespace(rcloneVals)
+	jobName := releaseName + "-" + jobSuffix(req)
+
+	deeper.Info(fmt.Sprintf(
+		"🚚 %s job %s in namespace %s, image %s, %s",
+		jobSuffix(req),
+		jobName,
+		namespace,
+		k8s.JobImage(ctx, pvcInfo.ClusterClient.KubeClient, namespace, jobName),
+		helm.DescribeMounts(rcloneVals),
+	))
 }
 
 func buildRcloneConfig(req *Request) (string, error) {
@@ -401,31 +489,51 @@ func validatePrefix(prefix string) error {
 func buildHelmValues(
 	namespace string,
 	req *Request,
-	pvcInfo *pvc.Info,
+	pvcInfo, archiveInfo *pvc.Info,
 	rcloneConf, cmdStr string,
 	readOnly bool,
-	metadataBase64, metadataRemotePath string,
+	meta metadataValues,
 ) map[string]any {
+	mounts := []map[string]any{
+		{
+			"name":      pvcInfo.Claim.Name,
+			"mountPath": dataMountPath,
+			"readOnly":  readOnly,
+		},
+	}
+
+	affinity := pvcInfo.AffinityHelmValues
+
+	if archiveInfo != nil {
+		// The archive claim is written on backup and read on restore, which is
+		// the opposite of the claim holding the data.
+		mounts = append(mounts, map[string]any{
+			"name":      archiveInfo.Claim.Name,
+			"mountPath": archiveMountPath,
+			"readOnly":  !readOnly,
+		})
+
+		affinity = archiveAffinity(pvcInfo, archiveInfo)
+	}
+
 	rcloneVals := map[string]any{
-		"enabled":     true,
-		"namespace":   namespace,
-		"configMount": true,
+		"enabled":   true,
+		"namespace": namespace,
+		"jobSuffix": jobSuffix(req),
+		// A tar job writing to a volume has no remote and so no config; an
+		// rclone job, or a tar job streaming to S3, does.
+		"configMount": rcloneConf != "",
 		"config":      rcloneConf,
 		"command":     cmdStr,
 		"extraArgs":   "",
-		"pvcMounts": []map[string]any{
-			{
-				"name":      pvcInfo.Claim.Name,
-				"mountPath": dataMountPath,
-				"readOnly":  readOnly,
-			},
-		},
-		"affinity": pvcInfo.AffinityHelmValues,
+		"pvcMounts":   mounts,
+		"affinity":    affinity,
 	}
 
-	if metadataBase64 != "" {
-		rcloneVals["metadataBase64"] = metadataBase64
-		rcloneVals["metadataRemotePath"] = metadataRemotePath
+	if meta.base64 != "" {
+		rcloneVals["metadataBase64"] = meta.base64
+		rcloneVals["metadataRemotePath"] = meta.remotePath
+		rcloneVals["metadataLocalPath"] = meta.localPath
 	}
 
 	vals := map[string]any{
@@ -503,15 +611,7 @@ func installHelmChart(
 	details.Info("📦 created release " + releaseName)
 
 	if rcloneVals, ok := helm.EnabledComponent(merged, "rclone"); ok {
-		namespace := helm.ComponentNamespace(rcloneVals)
-
-		deeper.Info(fmt.Sprintf(
-			"🚚 rclone job %s-rclone in namespace %s, image %s, %s",
-			releaseName,
-			namespace,
-			k8s.JobImage(ctx, pvcInfo.ClusterClient.KubeClient, namespace, releaseName+"-rclone"),
-			helm.DescribeMounts(rcloneVals),
-		))
+		narrateMoverJob(ctx, req, pvcInfo, releaseName, rcloneVals, deeper)
 
 		if helm.NetworkPolicyOn(rcloneVals) {
 			deeper.Info("🔒 network policy for the rclone pod, so a default-deny namespace does not block it")
@@ -729,4 +829,14 @@ func shouldShowProgressBar(w io.Writer) bool {
 	}
 
 	return isatty.IsTerminal(file.Fd())
+}
+
+// jobSuffix names the data mover the job runs. It ends the job's name, which
+// is how the exit-code table and the progress parser are chosen for it.
+func jobSuffix(req *Request) string {
+	if isArchive(req) {
+		return "tar"
+	}
+
+	return "rclone"
 }

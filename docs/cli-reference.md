@@ -73,10 +73,16 @@ Usage:
 
 Flags:
       --access-key string                 S3 access key
+      --archive-file string               Write the volume to one tar file: s3://<bucket>/<key> streamed to S3 with the S3 flags' credentials, <claim>:<path> on a claim, or a bare path inside the job pod. Compression follows the extension (.tar.zst, .tzst, .tar.gz, .tgz, .tar). strftime tokens such as %Y-%m-%d_%H%M are expanded
       --backend string                    Storage backend: s3, azure, or gcs
       --bucket string                     Bucket (or container) name
+      --compression-level int             Compression level for --archive-file, the compressor's own default when unset
       --detach                            Detach after the rclone job starts running
       --endpoint string                   S3-compatible endpoint URL
+      --flush string                      Quiesce the database in the pod that has the claim mounted while the snapshot is cut, one of: mariadb, mongodb, mysql, postgres, scylladb. Implies --snapshot
+      --flush-command strings             Replace the client command --flush runs in the database container, for a kind that runs one
+      --flush-container string            Container to run the --flush client in, for a pod with more than one
+      --from-snapshot string              Back up a clone of this existing VolumeSnapshot instead of cutting a new one
       --gcs-bucket-policy-only            Set rclone GCS bucket_policy_only (default true)
       --gcs-service-account-file string   Path to GCS service account JSON file (env PV_MIGRATE_GCS_SERVICE_ACCOUNT_JSON expects JSON contents)
       --helm-set strings                  Additional Helm values (key1=val1,key2=val2)
@@ -87,6 +93,7 @@ Flags:
   -h, --help                              help for backup
       --id string                         Custom operation ID (lowercase alphanumeric with optional hyphens, max 24 chars)
   -i, --ignore-mounted                    Do not fail if the PVC is mounted
+      --keep-snapshot                     Leave the VolumeSnapshot in place after the backup
       --name string                       Backup name (identity in the bucket, required unless using --rclone-config)
   -x, --no-cleanup                        Do not clean up after the operation
       --no-cleanup-on-failure             Skip cleanup if the operation fails, leaving resources for inspection
@@ -99,6 +106,8 @@ Flags:
       --remote string                     Remote spec for raw config mode (e.g., myremote:bucket/path)
       --s3-provider string                Rclone S3 provider (default "Other")
       --secret-key string                 S3 secret key (prefer env PV_MIGRATE_S3_SECRET_KEY)
+      --snapshot                          Cut a VolumeSnapshot of the claim and back up a clone of it, then remove both
+      --snapshot-class string             VolumeSnapshotClass for --snapshot, the cluster default when unset
       --source string                     Source PVC name
   -c, --source-context string             Kubernetes context to use
   -k, --source-kubeconfig string          Path to the kubeconfig file
@@ -121,8 +130,10 @@ Usage:
 
 Flags:
       --access-key string                 S3 access key
+      --archive-file string               Write the volume to one tar file: s3://<bucket>/<key> streamed to S3 with the S3 flags' credentials, <claim>:<path> on a claim, or a bare path inside the job pod. Compression follows the extension (.tar.zst, .tzst, .tar.gz, .tgz, .tar). strftime tokens such as %Y-%m-%d_%H%M are expanded
       --backend string                    Storage backend: s3, azure, or gcs
       --bucket string                     Bucket (or container) name
+      --compression-level int             Compression level for --archive-file, the compressor's own default when unset
   -d, --delete-extraneous-files           Delete extraneous files on the destination using rclone sync instead of copy
       --dest string                       Destination PVC name
   -C, --dest-context string               Kubernetes context to use

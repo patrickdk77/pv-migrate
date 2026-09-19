@@ -1061,6 +1061,19 @@ func setupLongPVCNames(t *testing.T, si *sharedInfra) *testEnv {
 // --- Infrastructure helpers ---
 
 // newTestNS creates a namespace with a random suffix and registers fire-and-forget cleanup.
+// skipOrFail skips a test that needs infrastructure this cluster does not
+// have, unless the named environment variable demands it run, which is how CI
+// turns a silent skip into a failure where the infrastructure is expected.
+func skipOrFail(t *testing.T, msg, mustRunEnv string) {
+	t.Helper()
+
+	if os.Getenv(mustRunEnv) != "" {
+		t.Fatalf("%s (%s is set)", msg, mustRunEnv)
+	}
+
+	t.Skip(msg)
+}
+
 func newTestNS(t *testing.T, cli *k8s.ClusterClient, prefix string) string {
 	t.Helper()
 

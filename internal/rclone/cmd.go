@@ -101,6 +101,11 @@ func BuildMetadataRemotePath(bucket, prefix, name string) string {
 	return fmt.Sprintf("%s:%s/%s/%s.meta.yaml", remoteName, bucket, prefix, name)
 }
 
+// BuildObjectPath constructs the remote path of one object: remote:<bucket>/<key>.
+func BuildObjectPath(bucket, key string) string {
+	return fmt.Sprintf("%s:%s/%s", remoteName, bucket, strings.TrimPrefix(key, "/"))
+}
+
 // BuildRemotePathRaw returns the user-provided remote spec as-is (for --rclone-config mode).
 func BuildRemotePathRaw(remote string) string {
 	return remote

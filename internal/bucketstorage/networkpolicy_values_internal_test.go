@@ -23,8 +23,8 @@ func TestRcloneValuesFollowNetworkPolicyPermission(t *testing.T) {
 		Claim: &corev1.PersistentVolumeClaim{Namespace: "ns", Name: "pvc"},
 	}
 
-	values := buildHelmValues("ns", &Request{}, info, "[remote]\ntype = s3\n", "rclone sync '/data' 'remote:b/'",
-		true, "", "")
+	values := buildHelmValues("ns", &Request{}, info, nil, "[remote]\ntype = s3\n",
+		"rclone sync '/data' 'remote:b/'", true, metadataValues{})
 
 	denyAll := func(_ context.Context, _ string) (bool, error) { return false, nil }
 

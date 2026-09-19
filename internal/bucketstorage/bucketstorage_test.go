@@ -239,7 +239,8 @@ func TestBuildHelmValues_MetadataPresentWhenGenerated(t *testing.T) {
 		Direction: rclone.DirectionBackup,
 	}
 
-	got := bucketstorage.BuildHelmValues("default", req, info, "conf", "cmd", true, "metadata", "remote:path.meta.yaml")
+	got := bucketstorage.BuildHelmValues("default", req, info, nil, "conf", "cmd", true,
+		bucketstorage.MetadataValues("metadata", "remote:path.meta.yaml", ""))
 	rcloneVals := got["rclone"].(map[string]any) //nolint:forcetypeassert
 
 	assert.Equal(t, "metadata", rcloneVals["metadataBase64"])

@@ -65,6 +65,34 @@ type Backup struct {
 	// RcloneExtraArgs are extra flags appended to the rclone command after the built-in progress flags.
 	RcloneExtraArgs string
 
+	// ArchiveFile selects the archive workflow: the volume is written to or
+	// read from one tar file instead of being synced to a bucket. Its value is
+	// "<claim>:<path>" for a file on a claim, or a bare path for one on this
+	// process's own filesystem. Compression comes from the path's extension,
+	// and strftime-style tokens in it are expanded when the operation runs.
+	ArchiveFile string
+	// CompressionLevel overrides the compressor's own default. Zero uses it.
+	CompressionLevel int
+
+	// Snapshot cuts a VolumeSnapshot of the claim and backs up a clone of it,
+	// so the backup reads a point in time rather than the live volume. The
+	// clone and the snapshot are removed afterwards unless KeepSnapshot is
+	// set. SnapshotClass names the VolumeSnapshotClass; empty uses the
+	// cluster default.
+	Snapshot      bool
+	SnapshotClass string
+	KeepSnapshot  bool
+	// FromSnapshot names an existing VolumeSnapshot to clone and back up,
+	// instead of cutting a new one.
+	FromSnapshot string
+	// Flush quiesces the database in the pod that has the claim mounted while
+	// the snapshot is cut. It names the kind of database, and implies
+	// Snapshot. FlushContainer picks the container in a multi-container pod,
+	// and FlushCommand replaces the client command the kind would run.
+	Flush          string
+	FlushContainer string
+	FlushCommand   []string
+
 	IgnoreMounted      bool
 	NonRoot            bool
 	Detach             bool
@@ -159,6 +187,15 @@ func toBackupRequest(backup *Backup, direction string) *bucketstorage.Request {
 		RcloneConfigFile:      backup.RcloneConfigFile,
 		Remote:                backup.Remote,
 		RcloneExtraArgs:       backup.RcloneExtraArgs,
+		ArchiveFile:           backup.ArchiveFile,
+		CompressionLevel:      backup.CompressionLevel,
+		Snapshot:              backup.Snapshot,
+		SnapshotClass:         backup.SnapshotClass,
+		KeepSnapshot:          backup.KeepSnapshot,
+		FromSnapshot:          backup.FromSnapshot,
+		Flush:                 backup.Flush,
+		FlushContainer:        backup.FlushContainer,
+		FlushCommand:          backup.FlushCommand,
 		HelmTimeout:           backup.HelmTimeout,
 		HelmValuesFiles:       backup.HelmValuesFiles,
 		HelmValues:            backup.HelmValues,

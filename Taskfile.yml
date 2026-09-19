@@ -129,6 +129,29 @@ tasks:
     cmds:
       - go test -tags integration -timeout 30m -v ./integration/ -run TestMigrate
 
+  # The backup suites need a bucket; the archive suite needs one only for its
+  # S3 case. Both need RCLONE_IMAGE to point at an image carrying tar and zstd,
+  # since the published one does not.
+  test:integration:backup:
+    desc: run the bucket and archive integration tests against the current kube context
+    cmds:
+      - go test -tags integration -timeout 30m -v ./integration/ -run 'TestBackupRestore|TestArchive'
+
+  # Snapshot and flush need the VolumeSnapshot CRDs, their controller, and a
+  # storage class that can snapshot. They skip without PVMIG_TEST_SNAPSHOT_CLASS,
+  # and fail instead of skipping when PVMIG_TEST_SNAPSHOT_MUST_RUN is set.
+  # Needs a cluster with two or more schedulable nodes. It skips on one node,
+  # and fails instead of skipping when PVMIG_TEST_MULTINODE_MUST_RUN is set.
+  test:integration:multinode:
+    desc: run the multi-node scheduling integration tests against the current kube context
+    cmds:
+      - go test -tags integration -timeout 20m -v ./integration/ -run TestMultiNode
+
+  test:integration:snapshot:
+    desc: run the snapshot and database-flush integration tests against the current kube context
+    cmds:
+      - go test -tags integration -timeout 45m -v ./integration/ -run 'TestSnapshot|TestFlush'
+
   # `task test` already replays every fuzz target's seed corpus, which is where
   # the regression value sits. This drives the actual search instead, one target
   # at a time because -fuzz only ever fuzzes one. A discovered failure is written

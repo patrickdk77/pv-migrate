@@ -185,6 +185,50 @@ func TestRcloneScriptFailsWhenTheMetadataUploadFails(t *testing.T) {
 	assert.Contains(t, out, "metadata upload failed with exit code 7")
 }
 
+// TestRcloneScriptWritesMetadataToALocalPath covers the archive workflow, whose
+// job has no rclone remote to upload the sidecar to and writes it onto the
+// mounted archive volume instead.
+func TestRcloneScriptWritesMetadataToALocalPath(t *testing.T) {
+	t.Parallel()
+
+	target := filepath.Join(t.TempDir(), "backup.meta.yaml")
+
+	script := rcloneScript(t, map[string]any{
+		"command":           exitingMover(0),
+		"metadataBase64":    "dGVzdAo=",
+		"metadataLocalPath": target,
+	})
+
+	// The Job passes this path to the script as an environment variable, which
+	// the rendered script reads but this harness does not set for it.
+	code, _ := runScript(t, script, "PV_MIGRATE_METADATA_LOCAL_PATH="+target)
+	require.Equal(t, 0, code)
+
+	written, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "test\n", string(written))
+}
+
+// TestRcloneScriptFailsWhenTheLocalMetadataWriteFails: the same rule as the
+// upload, on the path that writes the sidecar to a volume. A backup whose
+// sidecar never landed may not report success.
+func TestRcloneScriptFailsWhenTheLocalMetadataWriteFails(t *testing.T) {
+	t.Parallel()
+
+	target := filepath.Join(t.TempDir(), "no-such-dir", "backup.meta.yaml")
+
+	script := rcloneScript(t, map[string]any{
+		"command":           exitingMover(0),
+		"metadataBase64":    "dGVzdAo=",
+		"metadataLocalPath": target,
+	})
+
+	code, out := runScript(t, script, "PV_MIGRATE_METADATA_LOCAL_PATH="+target)
+
+	assert.NotEqual(t, 0, code, "a sidecar that never landed must fail the job")
+	assert.Contains(t, out, "metadata upload failed with exit code")
+}
+
 // TestRcloneScriptRetriesUsageErrors pins that rclone, unlike rsync, retries an
 // exit 1: rclone was observed exiting 1 for a transient credentials failure, so
 // treating it as a deterministic usage error would drop the retry budget where

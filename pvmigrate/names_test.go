@@ -33,7 +33,7 @@ var migrationComponents = []string{"", "-rsync", "-sshd"}
 // operationComponents are the chart's rclone resources. Only a backup or restore
 // release contains them, and such a release has no per-side suffix, which is why
 // this family is enumerated separately rather than crossed with the strategies.
-var operationComponents = []string{"", "-rclone"}
+var operationComponents = []string{"", "-rclone", "-tar"}
 
 // operationMiddles are what the backup and restore commands use in the position
 // where a migration uses a strategy name.
