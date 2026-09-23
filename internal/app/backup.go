@@ -43,9 +43,12 @@ const (
 	FlagFlush                 = "flush"
 	FlagFlushContainer        = "flush-container"
 	FlagFlushCommand          = "flush-command"
+	FlagFlushUser             = "flush-user"
+	FlagFlushPasswordSecret   = "flush-password-secret"
 
 	envS3AccessKey           = "PV_MIGRATE_S3_ACCESS_KEY"
-	envS3SecretKey           = "PV_MIGRATE_S3_SECRET_KEY" //nolint:gosec // Environment variable name, not a secret.
+	envS3SecretKey           = "PV_MIGRATE_S3_SECRET_KEY"  //nolint:gosec // Environment variable name, not a secret.
+	envFlushPassword         = "PV_MIGRATE_FLUSH_PASSWORD" //nolint:gosec // Environment variable name, not a secret.
 	envAzureStorageAccount   = "PV_MIGRATE_AZURE_STORAGE_ACCOUNT"
 	envAzureStorageKey       = "PV_MIGRATE_AZURE_STORAGE_KEY"
 	envGCSServiceAccountJSON = "PV_MIGRATE_GCS_SERVICE_ACCOUNT_JSON"
@@ -137,7 +140,14 @@ func setSnapshotFlags(cmd *cobra.Command, backup *pvmigrate.Backup) {
 	flags.StringVar(&backup.FlushContainer, FlagFlushContainer, backup.FlushContainer,
 		"Container to run the --flush client in, for a pod with more than one")
 	flags.StringSliceVar(&backup.FlushCommand, FlagFlushCommand, backup.FlushCommand,
-		"Replace the client command --flush runs in the database container, for a kind that runs one")
+		"Replace the client command --flush runs in the database container, for a kind that runs one, "+
+			"as comma-separated argv (sh,-c,'...'). To log in as another user use --flush-user instead")
+	flags.StringVar(&backup.FlushUser, FlagFlushUser, backup.FlushUser,
+		"User the --flush client logs in as, default what the database image seeds (root for MySQL and MariaDB, "+
+			"POSTGRES_USER for PostgreSQL, MONGO_INITDB_ROOT_USERNAME for MongoDB)")
+	flags.StringVar(&backup.FlushPasswordSecret, FlagFlushPasswordSecret, backup.FlushPasswordSecret,
+		"Secret in the claim's namespace holding the --flush password, as name (key \"password\") or name:key. "+
+			"The password can instead come from env "+envFlushPassword)
 }
 
 func setSnapshotFlagCompletions(cmd *cobra.Command) error {
@@ -165,6 +175,13 @@ func runBackup(cmd *cobra.Command, backup *pvmigrate.Backup, logger *slog.Logger
 
 	applyBucketStorageEnvDefaults(&backup.AccessKey, &backup.SecretKey,
 		&backup.StorageAccount, &backup.StorageKey, &backup.GCSServiceAccountJSON)
+
+	// A Secret named on the command line wins over the environment, since a
+	// CronJob may carry the variable for another run and name a Secret for
+	// this one. Only the library refuses both, where both were set on purpose.
+	if backup.FlushPasswordSecret == "" {
+		setStringFromEnvIfEmpty(&backup.FlushPassword, envFlushPassword)
+	}
 
 	return pvmigrate.RunBackup(ctx, *backup)
 }

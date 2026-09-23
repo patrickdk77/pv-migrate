@@ -112,6 +112,14 @@ type Request struct {
 	FlushContainer string
 	FlushCommand   []string
 
+	// FlushUser is who the flush client logs in as, empty for what the
+	// database's image seeds. The password comes from FlushPassword, or from
+	// a Secret in the claim's namespace named by FlushPasswordSecret as
+	// "name" or "name:key"; one of the two at most.
+	FlushUser           string
+	FlushPassword       string
+	FlushPasswordSecret string
+
 	HelmTimeout      time.Duration
 	HelmValuesFiles  []string
 	HelmValues       []string

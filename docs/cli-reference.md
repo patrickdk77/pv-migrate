@@ -81,8 +81,10 @@ Flags:
       --detach                            Detach after the rclone job starts running
       --endpoint string                   S3-compatible endpoint URL
       --flush string                      Quiesce the database in the pod that has the claim mounted while the snapshot is cut, one of: mariadb, mongodb, mysql, postgres, scylladb. Implies --snapshot
-      --flush-command strings             Replace the client command --flush runs in the database container, for a kind that runs one
+      --flush-command strings             Replace the client command --flush runs in the database container, for a kind that runs one, as comma-separated argv (sh,-c,'...'). To log in as another user use --flush-user instead
       --flush-container string            Container to run the --flush client in, for a pod with more than one
+      --flush-password-secret string      Secret in the claim's namespace holding the --flush password, as name (key "password") or name:key. The password can instead come from env PV_MIGRATE_FLUSH_PASSWORD
+      --flush-user string                 User the --flush client logs in as, default what the database image seeds (root for MySQL and MariaDB, POSTGRES_USER for PostgreSQL, MONGO_INITDB_ROOT_USERNAME for MongoDB)
       --from-snapshot string              Back up a clone of this existing VolumeSnapshot instead of cutting a new one
       --gcs-bucket-policy-only            Set rclone GCS bucket_policy_only (default true)
       --gcs-service-account-file string   Path to GCS service account JSON file (env PV_MIGRATE_GCS_SERVICE_ACCOUNT_JSON expects JSON contents)

@@ -93,6 +93,15 @@ type Backup struct {
 	FlushContainer string
 	FlushCommand   []string
 
+	// FlushUser is who the flush client logs in as; empty means what the
+	// database's image seeds, such as root for MySQL. The password is either
+	// FlushPassword or read from a Secret in the claim's namespace named by
+	// FlushPasswordSecret, as "name" (key "password") or "name:key". It is
+	// sent to the client on stdin, never on a command line.
+	FlushUser           string
+	FlushPassword       string
+	FlushPasswordSecret string
+
 	IgnoreMounted      bool
 	NonRoot            bool
 	Detach             bool
@@ -196,6 +205,9 @@ func toBackupRequest(backup *Backup, direction string) *bucketstorage.Request {
 		Flush:                 backup.Flush,
 		FlushContainer:        backup.FlushContainer,
 		FlushCommand:          backup.FlushCommand,
+		FlushUser:             backup.FlushUser,
+		FlushPassword:         backup.FlushPassword,
+		FlushPasswordSecret:   backup.FlushPasswordSecret,
 		HelmTimeout:           backup.HelmTimeout,
 		HelmValuesFiles:       backup.HelmValuesFiles,
 		HelmValues:            backup.HelmValues,

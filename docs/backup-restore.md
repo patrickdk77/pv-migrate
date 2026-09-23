@@ -301,37 +301,103 @@ The lock is released on every failure path after it is taken.
 
 The database's pod is found as the one that has the claim mounted, so there is nothing to name.
 `--flush-container` picks the container when that pod has more than one.
-The client runs inside that container and takes its credentials from the environment the image already provides, so nothing is passed on a command line.
-`--flush-command` replaces the client command, for an image that keeps its client or its credentials somewhere else.
-It applies to the kinds that run one client; `mongodb` runs three, to lock, unlock and check, and refuses it.
+The client runs inside that container.
 
 What each kind does, and what it protects:
 
 | Kind | What runs | Protects |
 |---|---|---|
-| `mysql` | `LOCK INSTANCE FOR BACKUP`, held in one session across the cut | Blocks DDL, writes continue. Needs `BACKUP_ADMIN`. InnoDB recovers the rest from its redo log. |
-| `mariadb` | `BACKUP STAGE START` then `BLOCK_COMMIT`, held in one session, then `END` | Flushes non-transactional tables, blocks DDL, holds commits so the cut is a clean commit boundary. Needs `RELOAD`. |
-| `postgres` | `CHECKPOINT`, once, nothing held | Shortens recovery only. The snapshot is crash-consistent through the WAL regardless. Needs superuser or `pg_checkpoint`. |
-| `mongodb` | `db.fsyncLock()` before the cut, `db.fsyncUnlock()` after | Flushes, checkpoints and blocks writes. The lock is counted on the server, so the unlock's own reported count is checked: anything but zero means a lock leaked by an earlier run is still held, and the backup fails rather than leaving the database blocked. |
+| `mysql`, `mariadb` | The lock the server's version supports, held in one session across the cut | See the table below. |
+| `postgres` | `CHECKPOINT`, once, nothing held | Shortens recovery only. The snapshot is crash-consistent through the WAL regardless. Needs superuser, or `pg_checkpoint` on 15 and later. |
+| `mongodb` | `db.fsyncLock()` before the cut, `db.fsyncUnlock()` after | Flushes, checkpoints and blocks writes. Needs the `hostManager` role. |
 | `scylladb` | `nodetool flush`, once, nothing held | Moves memtables into sealed SSTables. The commitlog replays what arrives after. |
 
 Three of the five hold nothing.
 PostgreSQL and ScyllaDB run one command and are done; MongoDB's lock lives on the server rather than in a connection, so it is set and cleared by two separate commands.
 MySQL and MariaDB keep the lock only as long as the session that took it, so for those the client is held open on its stdin from the lock until the cut is confirmed.
 
-A few facts worth knowing before relying on a kind:
+#### MySQL and MariaDB versions
 
+`--flush mysql` and `--flush mariadb` are the same recipe.
+The client first asks the server for its version and chooses the lock from the answer, so either name works against either server.
+It asks instead of trying the newest statement and falling back, because in batch mode the client exits on the first error and takes any lock it held with it.
+
+| Server | Lock | Released by | Privilege |
+|---|---|---|---|
+| MySQL and Percona Server 8.0 and later | `LOCK INSTANCE FOR BACKUP` | `UNLOCK INSTANCE` | `BACKUP_ADMIN` |
+| Percona Server 5.7 | `LOCK TABLES FOR BACKUP` | `UNLOCK TABLES` | `RELOAD` |
+| Oracle MySQL 5.7 and older | `FLUSH TABLES WITH READ LOCK` | `UNLOCK TABLES` | `RELOAD` |
+| MariaDB 10.4 and later | `BACKUP STAGE START`, then `BLOCK_COMMIT` | `BACKUP STAGE END` | `RELOAD` |
+| MariaDB 10.3 and older | `FLUSH TABLES WITH READ LOCK` | `UNLOCK TABLES` | `RELOAD` |
+
+`LOCK INSTANCE FOR BACKUP` blocks DDL and lets writes continue, and InnoDB recovers the rest from its redo log.
+Percona's `LOCK TABLES FOR BACKUP` blocks DDL and writes to non-transactional tables, and InnoDB writes continue.
+The BACKUP STAGE pair flushes non-transactional tables, blocks DDL and holds commits, so the cut lands on a clean commit boundary.
+`FLUSH TABLES WITH READ LOCK` blocks every write for the length of the cut.
+It also waits for running statements to finish before it is granted, so a long query delays the snapshot.
+
+A privilege from an older row is not enough for a newer one.
+`RELOAD` covers every lock but `LOCK INSTANCE FOR BACKUP`, and on 8.0 and later the backup user needs `BACKUP_ADMIN`.
+The integration suite runs MySQL 5.7, 8.0, 8.4, 9.0 and 9.5, Percona Server 5.7, 8.0 and 8.4, and MariaDB 10.3, 10.4, 10.6, 10.11, 11.4, 11.8 and 12.
+
+#### Logging in
+
+With no credentials given, the client logs in with what the image seeded.
+For MySQL and MariaDB that is root with `MARIADB_ROOT_PASSWORD` or `MYSQL_ROOT_PASSWORD`.
+For PostgreSQL it is `POSTGRES_USER`, or `postgres`, with `POSTGRES_PASSWORD`.
+For MongoDB it is `MONGO_INITDB_ROOT_USERNAME` with `MONGO_INITDB_ROOT_PASSWORD`, or no login at all when the image seeded none.
+
+A database run by an operator usually has none of these, and a backup should not log in as root anyway.
+Give the flush a user of its own instead:
+
+```bash
+pv-migrate backup \
+  --source mysql-data \
+  --flush mysql \
+  --flush-user backup \
+  --flush-password-secret mysql-backup-user \
+  --archive-file 'nfs:/backups/mysql-%Y-%m-%d_%H%M.tar.zst'
+```
+
+`--flush-password-secret` takes a Secret name, which reads its `password` key, or `name:key` for another key.
+It reads the Secret from the claim's namespace, which is where an operator keeps the database's own credentials.
+So a CronJob running in a backup namespace can use them without a copy, which a `secretKeyRef` cannot do across namespaces.
+The ServiceAccount needs `get` on Secrets in the database's namespace for this.
+The `PV_MIGRATE_FLUSH_PASSWORD` environment variable is the other way to pass the password, and `--flush-password-secret` wins when both are set.
+
+The password never goes on a command line or into a pod spec.
+The client reads it from the first line of its stdin and hands it on in `MYSQL_PWD` or `PGPASSWORD`.
+MongoDB's shells read no such variable, so for `mongodb` the password is an argument to the shell inside the database's own container, and anyone who can list that container's processes can see it.
+A password containing a line break is refused, since the rest of it would reach the client as a statement.
+No error message quotes the password.
+
+Credentials are refused where they cannot apply, instead of being silently dropped.
+`--flush-command` brings its own client and its own login, and `scylladb` runs `nodetool`, which talks to the node's local REST API and logs in as nobody.
+
+`--flush-command` replaces the client command, for an image that keeps its client somewhere else.
+It is a comma-separated argument list such as `mysql,-ubackup,--batch`, not a shell string, so a value with spaces in it is a single argument.
+It applies to the kinds that run one client; `mongodb` runs three, to lock, unlock and check, and refuses it.
+
+#### Other things to know
+
+- `mysql` and `mariadb`: whichever of the `mariadb` and `mysql` clients the image has is used.
+  MariaDB 11.4 and later ship only `mariadb`, and MySQL images and MariaDB 10.3 only `mysql`.
+  The client runs with `--skip-reconnect`, because its default reconnect would silently drop the lock on a blip and let the cut proceed unprotected.
 - `postgres`: `pg_backup_start` is deliberately not used.
   Its label file makes recovery insist on a record written after the cut, which a snapshot cannot contain, and the restore fails with "WAL ends before end of online backup".
   Unlogged tables are truncated on any crash, snapshot included.
   A database with its WAL on a separate claim needs a VolumeGroupSnapshot, which this tool does not do.
+  The integration suite runs PostgreSQL 11 through 18.
 - `mongodb`: point it at a hidden secondary, not the primary.
-  A run fails if the database is still locked after its unlock, which means an earlier run leaked one; clear it with `db.fsyncUnlock()` until the count reaches zero.
-  The credentials go on the client's command line inside the pod, since `mongosh` has no environment variable for a password.
+  Both commands' answers are checked.
+  The legacy `mongo` shell of 4.4 reports a refused lock and still exits 0, so the run fails unless the lock says it took.
+  The lock is counted on the server, so the run also fails if the unlock reports a count above zero, which means an earlier run leaked one; clear it with `db.fsyncUnlock()` until the count reaches zero.
+  `mongosh` is used where the image has it, the legacy `mongo` shell otherwise.
   After a restore, delete the stale `mongod.lock`; for a replica set, drop the `local` database and re-initiate.
+  The integration suite runs MongoDB 4.4, 5.0, 6.0, 7.0, 8.0 and 8.2.
 - `scylladb`: the flush is per node.
   Consistency across nodes is restored afterwards by `nodetool repair`, not captured at backup time.
-- `mariadb`: the client runs with `--skip-reconnect`, because its default reconnect would silently drop the backup stages on a blip and let the cut proceed unprotected.
+  The integration suite runs ScyllaDB 5.4, 6.2 and 2025.3.
 
 Grafana and Prometheus need no `--flush`, and none is offered.
 Grafana's SQLite runs with the default rollback journal and full sync, which is built to survive power loss, so a snapshot is a consistent database that rolls back any half-finished transaction on next open.

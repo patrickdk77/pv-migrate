@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/utkuozdemir/pv-migrate/internal/flush"
 	"github.com/utkuozdemir/pv-migrate/internal/k8s"
@@ -409,20 +412,25 @@ func quiesce(
 		return func() error { return nil }, nil
 	}
 
-	spec, target, err := prepareFlush(client, req, source)
+	plan, err := prepareFlush(ctx, client, req, source)
 	if err != nil {
 		return nil, err
 	}
 
-	var release func() error
+	spec, target, creds := plan.spec, plan.target, plan.creds
+
+	var (
+		release func() error
+		note    = spec.Note
+	)
 
 	switch spec.Mode {
 	case flush.ModeSession:
-		release, err = quiesceSession(ctx, target, req.Flush, spec)
+		release, note, err = quiesceSession(ctx, target, req.Flush, spec, creds)
 	case flush.ModeOneShot:
-		release, err = quiesceOneShot(ctx, target, req.Flush, spec)
+		release, err = quiesceOneShot(ctx, target, req.Flush, spec, creds)
 	case flush.ModePair:
-		release, err = quiescePair(ctx, target, req.Flush, spec)
+		release, err = quiescePair(ctx, target, req.Flush, spec, creds)
 	default:
 		return nil, fmt.Errorf("--flush %s has an unknown mode %d", req.Flush, spec.Mode)
 	}
@@ -433,7 +441,7 @@ func quiesce(
 
 	lockedAt := time.Now()
 
-	details.Info(fmt.Sprintf("🔒 %s quiesced in pod %s: %s", req.Flush, source.MountedPod, spec.Note))
+	details.Info(fmt.Sprintf("🔒 %s quiesced in pod %s: %s", req.Flush, source.MountedPod, note))
 
 	released := false
 
@@ -455,17 +463,26 @@ func quiesce(
 	}, nil
 }
 
+// flushPlan is what a flush runs, where, and as whom.
+type flushPlan struct {
+	spec   flush.Spec
+	target execTarget
+	creds  *flush.Credentials
+}
+
 // prepareFlush resolves the kind's recipe, applies a --flush-command
-// override, and works out which pod and container the commands run in: the
+// override, works out the credentials, and finds where the commands run: the
 // pod that has the claim mounted, which for a database volume is the database.
-func prepareFlush(client *k8s.ClusterClient, req *Request, source *pvc.Info) (flush.Spec, execTarget, error) {
+func prepareFlush(
+	ctx context.Context, client *k8s.ClusterClient, req *Request, source *pvc.Info,
+) (flushPlan, error) {
 	spec, err := flush.Lookup(req.Flush)
 	if err != nil {
-		return flush.Spec{}, execTarget{}, err
+		return flushPlan{}, err
 	}
 
 	if source.MountedPod == "" {
-		return flush.Spec{}, execTarget{}, fmt.Errorf(
+		return flushPlan{}, fmt.Errorf(
 			"--flush %s needs a database to talk to, but no pod has claim %s mounted",
 			req.Flush, source.Claim.Name)
 	}
@@ -474,18 +491,121 @@ func prepareFlush(client *k8s.ClusterClient, req *Request, source *pvc.Info) (fl
 		// A pair kind runs three commands, and replacing only the first would
 		// lock with the user's client and unlock with the built-in one.
 		if spec.Mode == flush.ModePair {
-			return flush.Spec{}, execTarget{}, fmt.Errorf(
+			return flushPlan{}, fmt.Errorf(
 				"--flush-command replaces the one client a kind runs, and %s runs three "+
 					"(lock, unlock and a check), so it takes none", req.Flush)
 		}
 
-		spec.Command = req.FlushCommand
+		spec = spec.WithCommand(req.FlushCommand)
 	}
 
-	return spec, execTarget{
-		client: client, namespace: source.Claim.Namespace,
-		pod: source.MountedPod, container: req.FlushContainer,
+	creds, err := resolveFlushCredentials(ctx, client, req, source.Claim.Namespace, spec)
+	if err != nil {
+		return flushPlan{}, err
+	}
+
+	return flushPlan{
+		spec: spec,
+		target: execTarget{
+			client: client, namespace: source.Claim.Namespace,
+			pod: source.MountedPod, container: req.FlushContainer,
+		},
+		creds: creds,
 	}, nil
+}
+
+// resolveFlushCredentials returns who the flush client logs in as, or nil
+// when the command reads no credentials.
+//
+// Credentials given to a command that cannot use them are refused rather than
+// dropped. A backup that ignored --flush-user would log in as whoever the
+// image seeds and either fail with an error naming the wrong user, or worse,
+// succeed as someone the operator did not intend.
+func resolveFlushCredentials(
+	ctx context.Context, client *k8s.ClusterClient, req *Request, namespace string, spec flush.Spec,
+) (*flush.Credentials, error) {
+	if !spec.ReadsCredentials {
+		return nil, refuseUnusedCredentials(req)
+	}
+
+	if req.FlushPassword != "" && req.FlushPasswordSecret != "" {
+		return nil, errors.New("give the flush password one way, either directly or " +
+			"with --flush-password-secret, not both")
+	}
+
+	creds := &flush.Credentials{User: req.FlushUser, Password: req.FlushPassword}
+
+	if req.FlushPasswordSecret != "" {
+		password, err := readSecretValue(ctx, client, namespace, req.FlushPasswordSecret)
+		if err != nil {
+			return nil, err
+		}
+
+		creds.Password = password
+	}
+
+	if err := creds.Check(); err != nil {
+		return nil, err
+	}
+
+	return creds, nil
+}
+
+// refuseUnusedCredentials allows a command that reads no credentials to run
+// only when none were given.
+func refuseUnusedCredentials(req *Request) error {
+	switch {
+	case req.FlushUser == "" && req.FlushPassword == "" && req.FlushPasswordSecret == "":
+		return nil
+	case len(req.FlushCommand) > 0:
+		return errors.New("--flush-command replaces the built-in client, so " +
+			"--flush-user and the flush password have nothing to apply to; " +
+			"log in from the command itself, or drop --flush-command")
+	default:
+		return fmt.Errorf("--flush %s logs in as nobody: nodetool reaches the node through its "+
+			"local REST API, not CQL, so --flush-user and the flush password do not apply", req.Flush)
+	}
+}
+
+// flushSecretDefaultKey is the key read when --flush-password-secret names
+// only a Secret.
+const flushSecretDefaultKey = "password"
+
+// readSecretValue reads one key of a Secret, named "name" or "name:key". The
+// Secret lives in the database's namespace, which is where an operator such
+// as Percona's keeps it, and where a CronJob in another namespace could not
+// reach it with a secretKeyRef.
+//
+// No error here quotes a value; a missing key lists the keys that exist.
+func readSecretValue(ctx context.Context, client *k8s.ClusterClient, namespace, ref string) (string, error) {
+	name, key, hasKey := strings.Cut(ref, ":")
+	if !hasKey {
+		key = flushSecretDefaultKey
+	}
+
+	if name == "" || key == "" {
+		return "", fmt.Errorf("--flush-password-secret %q must be a Secret name, or name:key", ref)
+	}
+
+	secret, err := client.KubeClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to read the flush password from secret %s/%s: %w", namespace, name, err)
+	}
+
+	value, ok := secret.Data[key]
+	if !ok {
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+
+		sort.Strings(keys)
+
+		return "", fmt.Errorf("secret %s/%s has no key %q; it has: %s",
+			namespace, name, key, strings.Join(keys, ", "))
+	}
+
+	return string(value), nil
 }
 
 // execTarget is where a flush command runs.
@@ -494,38 +614,71 @@ type execTarget struct {
 	namespace, pod, container string
 }
 
-func (t execTarget) run(ctx context.Context, command []string) (string, error) {
-	return flush.Run(ctx, t.client.RestConfig, t.client.KubeClient, t.namespace, t.pod, t.container, command)
-}
-
-// quiesceSession starts the client, sends the lock, and waits for the marker
-// that proves it executed. The returned release sends the unlock and lets the
-// client exit.
-func quiesceSession(
-	ctx context.Context, target execTarget, kind string, spec flush.Spec,
-) (func() error, error) {
-	session, err := flush.Open(ctx, target.client.RestConfig, target.client.KubeClient,
-		target.namespace, target.pod, target.container, spec.Command)
-	if err != nil {
-		return nil, err
+// run execs command. With credentials it sends the password as the first
+// line of stdin, which is where every built-in command reads it from.
+func (t execTarget) run(ctx context.Context, command []string, creds *flush.Credentials) (string, error) {
+	var password *string
+	if creds != nil {
+		password = &creds.Password
 	}
 
-	for _, statement := range []string{spec.Lock, spec.Probe} {
-		if err = session.Write(statement); err != nil {
-			_ = session.Close()
+	return flush.Run(ctx, t.client.RestConfig, t.client.KubeClient,
+		t.namespace, t.pod, t.container, command, password)
+}
 
-			return nil, err
+func userOf(creds *flush.Credentials) string {
+	if creds == nil {
+		return ""
+	}
+
+	return creds.User
+}
+
+// quiesceSession starts the client, asks the server what it is, chooses the
+// lock that server supports, sends it, and waits for the marker that proves
+// it executed. The returned release sends the matching unlock and lets the
+// client exit. The note returned names the server and the lock, since which
+// one was taken decides what the database went through.
+func quiesceSession(
+	ctx context.Context, target execTarget, kind string, spec flush.Spec, creds *flush.Credentials,
+) (func() error, string, error) {
+	session, err := flush.Open(ctx, target.client.RestConfig, target.client.KubeClient,
+		target.namespace, target.pod, target.container, spec.Command(userOf(creds)))
+	if err != nil {
+		return nil, "", err
+	}
+
+	fail := func(err error) (func() error, string, error) {
+		_ = session.Close()
+
+		return nil, "", err
+	}
+
+	if creds != nil {
+		if err = session.WriteSecret(creds.Password); err != nil {
+			return fail(err)
+		}
+	}
+
+	lock, server, err := chooseLock(ctx, session, kind, spec)
+	if err != nil {
+		return fail(err)
+	}
+
+	for _, statement := range []string{lock.Statement, spec.Probe} {
+		if err = session.Write(statement); err != nil {
+			return fail(err)
 		}
 	}
 
 	if err = session.WaitFor(ctx, spec.Marker, markerTimeout); err != nil {
-		_ = session.Close()
-
-		return nil, fmt.Errorf("failed to confirm the %s lock: %w", kind, err)
+		return fail(fmt.Errorf("failed to confirm the %s lock (%s): %w", kind, lock.Name, err))
 	}
 
+	note := fmt.Sprintf("%s on %s; %s", lock.Name, server, lock.Note)
+
 	return func() error {
-		if err := session.Write(spec.Unlock); err != nil {
+		if err := session.Write(lock.Unlock); err != nil {
 			_ = session.Close()
 
 			return err
@@ -536,15 +689,43 @@ func quiesceSession(
 		}
 
 		return nil
-	}, nil
+	}, note, nil
+}
+
+// chooseLock asks the server what it is and chooses the lock it supports. It
+// returns the server's version too, for the note.
+func chooseLock(
+	ctx context.Context, session *flush.Session, kind string, spec flush.Spec,
+) (flush.Lock, string, error) {
+	if err := session.Write(spec.Identify); err != nil {
+		return flush.Lock{}, "", err
+	}
+
+	if err := session.WaitFor(ctx, flush.IdentityEnd, markerTimeout); err != nil {
+		return flush.Lock{}, "", fmt.Errorf("--flush %s could not ask the server what it is: %w", kind, err)
+	}
+
+	identity, err := flush.ParseIdentity(session.Output())
+	if err != nil {
+		return flush.Lock{}, "", fmt.Errorf("--flush %s: %w", kind, err)
+	}
+
+	lock, err := spec.Choose(identity)
+	if err != nil {
+		return flush.Lock{}, "", fmt.Errorf("--flush %s: %w", kind, err)
+	}
+
+	server, _, _ := strings.Cut(identity, "|")
+
+	return lock, server, nil
 }
 
 // quiesceOneShot runs the command and holds nothing, so there is nothing to
 // release.
 func quiesceOneShot(
-	ctx context.Context, target execTarget, kind string, spec flush.Spec,
+	ctx context.Context, target execTarget, kind string, spec flush.Spec, creds *flush.Credentials,
 ) (func() error, error) {
-	if out, err := target.run(ctx, spec.Command); err != nil {
+	if out, err := target.run(ctx, spec.Command(userOf(creds)), creds); err != nil {
 		return nil, fmt.Errorf("--flush %s failed: %w; output: %s", kind, err, out)
 	}
 
@@ -556,10 +737,15 @@ func quiesceOneShot(
 // counts, rather than owns per connection, can be left over from an earlier
 // run, and one unlock would then leave it locked while reporting success.
 func quiescePair(
-	ctx context.Context, target execTarget, kind string, spec flush.Spec,
+	ctx context.Context, target execTarget, kind string, spec flush.Spec, creds *flush.Credentials,
 ) (func() error, error) {
-	if out, err := target.run(ctx, spec.Command); err != nil {
+	out, err := target.run(ctx, spec.Command(userOf(creds)), creds)
+	if err != nil {
 		return nil, fmt.Errorf("--flush %s failed: %w; output: %s", kind, err, out)
+	}
+
+	if err = checkLockTaken(kind, spec, out); err != nil {
+		return nil, err
 	}
 
 	// The release has to run even after the run's context is cancelled by a
@@ -567,7 +753,7 @@ func quiescePair(
 	releaseCtx := context.WithoutCancel(ctx)
 
 	return func() error {
-		out, err := target.run(releaseCtx, spec.Release)
+		out, err := target.run(releaseCtx, spec.Release(userOf(creds)), creds)
 		if err != nil {
 			return fmt.Errorf("the %s release failed and the database may still be locked: %w; output: %s",
 				kind, err, out)
@@ -581,6 +767,18 @@ func quiescePair(
 
 		return nil
 	}, nil
+}
+
+// checkLockTaken reads the lock command's output for LockMarker, since
+// exiting 0 does not mean the lock was taken. A refused lock holds nothing, so
+// there is nothing to release either.
+func checkLockTaken(kind string, spec flush.Spec, out string) error {
+	if spec.LockMarker != "" && !strings.Contains(out, spec.LockMarker) {
+		return fmt.Errorf("--flush %s: the database refused the lock, so the snapshot would not "+
+			"be protected; output: %s", kind, out)
+	}
+
+	return nil
 }
 
 // releaseSnapshotSource tears the clone and snapshot down once the backup is

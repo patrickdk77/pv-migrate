@@ -102,6 +102,25 @@ func (s *Session) Write(statement string) error {
 	return nil
 }
 
+// WriteSecret sends one line the way Write does, but never quotes it back.
+// Write names the statement in its errors, which is what a caller wants for
+// SQL and exactly wrong for a password.
+func (s *Session) WriteSecret(line string) error {
+	select {
+	case err := <-s.done:
+		s.done <- err
+
+		return fmt.Errorf("session ended before the credentials could be sent: %w", exitError(err))
+	default:
+	}
+
+	if _, err := io.WriteString(s.stdin, line+"\n"); err != nil {
+		return errors.New("failed to send the credentials to the session")
+	}
+
+	return nil
+}
+
 // WaitFor blocks until marker appears in the client's output, which is how a
 // caller learns a statement it sent has actually executed rather than merely
 // been buffered. A session that ends first is an error carrying its output.
@@ -189,16 +208,29 @@ func (w *lockedWriter) Write(data []byte) (int, error) {
 
 // Run execs command, waits for it to exit, and returns what it printed. It is
 // a Session opened and closed at once, for a quiesce that holds no state.
+//
+// A non-nil password is written as the first line of the command's stdin,
+// which is where every built-in command reads it from; nil sends nothing,
+// for a command that does not expect it.
 func Run(
 	ctx context.Context,
 	restConfig *rest.Config,
 	kube kubernetes.Interface,
 	namespace, pod, container string,
 	command []string,
+	password *string,
 ) (string, error) {
 	session, err := Open(ctx, restConfig, kube, namespace, pod, container, command)
 	if err != nil {
 		return "", err
+	}
+
+	if password != nil {
+		if err = session.WriteSecret(*password); err != nil {
+			_ = session.Close()
+
+			return session.Output(), err
+		}
 	}
 
 	err = session.Close()

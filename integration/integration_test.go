@@ -1265,6 +1265,12 @@ func provisionPod(ctx context.Context, cli *k8s.ClusterClient, ns, pvcName, podN
 // waitPodRunning waits until a pod reaches the Running phase.
 // Returns an error (instead of calling require) so it can be used in errgroup goroutines.
 func waitPodRunning(ctx context.Context, cli *k8s.ClusterClient, ns, name string) error {
+	return waitPodRunningWithin(ctx, cli, ns, name, 2*time.Minute)
+}
+
+// waitPodRunningWithin is waitPodRunning with a budget of the caller's, for a
+// pod whose image is large enough that pulling it takes minutes.
+func waitPodRunningWithin(ctx context.Context, cli *k8s.ClusterClient, ns, name string, timeout time.Duration) error {
 	resCli := cli.KubeClient.CoreV1().Pods(ns)
 	fieldSelector := fields.OneTermEqualSelector(metav1.ObjectNameField, name).String()
 
@@ -1291,7 +1297,7 @@ func waitPodRunning(ctx context.Context, cli *k8s.ClusterClient, ns, name string
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	_, err := watchtools.UntilWithSync(ctx, listWatch, &corev1.Pod{}, nil,
